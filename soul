@@ -1,0 +1,607 @@
+#!/usr/bin/env node
+
+// The Soul - Direct CLI Analyzer using WebAssembly
+
+global.Immolate = {};
+require("./immolate.js");
+
+function printHelp() {
+  console.log(`
+The Soul - Direct CLI Seed Analyzer
+
+Usage: ./soul [SEED] [OPTIONS]
+       ./soul --search [SEARCH_OPTIONS]
+
+Single Seed Analysis:
+  ./soul SEED123                    # Analyze one seed
+  ./soul MYSEED -a 5 -d Blue        # Custom ante/deck
+  --ante, -a <num>                  # Max ante (default: 8)
+  --deck, -d <name>                 # Deck (Red/Blue/Yellow/Green/Black/Magic/etc)
+  --stake, -s <name>                # Stake (White/Red/Green/Black/Blue/Purple/Orange/Gold)
+  --compact                         # Show only boss/voucher/first tag
+
+Search Mode:
+  ./soul --search --find DNA        # Search for any item containing "DNA"
+  ./soul --search --joker "Joker"   # Search for specific joker
+  ./soul --search --voucher Overstock --max 200
+  --search                          # Enable search mode
+  --find <text>                     # Search for any item containing text
+  --joker <name>                    # Search specifically for joker (can use multiple times)
+  --voucher <name>                  # Search specifically for voucher (can use multiple times)
+  --boss <name>                     # Search specifically for boss (can use multiple times)
+  --tag <name>                      # Search specifically for tag (can use multiple times)
+  --max <num>                       # Max seeds to check (default: 100)
+  --early <num>                     # Only check up to this ante (faster)
+  --quiet, -q                       # Only show matches
+  --any                             # Match ANY criteria (OR logic, default)
+  --all                             # Match ALL criteria (AND logic)
+
+Examples:
+  ./soul ABCDEF12
+  ./soul --search --joker "DNA" --max 50
+  ./soul --search --voucher "Overstock" --early 3 -q
+  ./soul --search --find "Polychrome" --deck Blue
+
+Multiple Item Search:
+  ./soul --search --joker "DNA" --joker "Brainstorm" --any    # Either DNA OR Brainstorm
+  ./soul --search --joker "DNA" --joker "Perkeo" --all        # Both DNA AND Perkeo
+  ./soul --search --tag "Polychrome" --voucher "Overstock" --all  # Polychrome tag AND Overstock
+  ./soul --search --boss "The Hook" --joker "DNA" --any       # The Hook boss OR DNA joker
+`);
+}
+
+function generateSeed() {
+  const chars = "ABCDEFGHIJKLMNPQRSTUVWXYZ123456789"; // No O or 0
+  const length = Math.floor(Math.random() * 5) + 4; // 4-8 chars
+  let seed = "";
+  for (let i = 0; i < length; i++) {
+    seed += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return seed;
+}
+
+function analyzeSeed(seed, options = {}) {
+  const {
+    ante = 8,
+    deck = "Red Deck",
+    stake = "White Stake",
+    compact = false,
+  } = options;
+
+  try {
+    const inst = new Immolate.Instance(seed);
+    inst.params = new Immolate.InstParams(deck, stake, false, 10106);
+    inst.initLocks(1, false, false);
+
+    // Lock standard vouchers
+    const lockedVouchers = [
+      "Overstock Plus",
+      "Liquidation",
+      "Glow Up",
+      "Reroll Glut",
+      "Omen Globe",
+      "Observatory",
+      "Nacho Tong",
+      "Recyclomancy",
+      "Tarot Tycoon",
+      "Planet Tycoon",
+      "Money Tree",
+      "Antimatter",
+      "Illusion",
+      "Petroglyph",
+      "Retcon",
+      "Palette",
+    ];
+    lockedVouchers.forEach((v) => inst.lock(v));
+
+    inst.setStake(stake);
+    inst.setDeck(deck);
+
+    let results = {
+      seed: seed,
+      deck: deck,
+      stake: stake,
+      antes: [],
+    };
+
+    for (let a = 1; a <= ante; a++) {
+      inst.initUnlocks(a, false);
+
+      let anteData = { ante: a };
+
+      // Boss
+      anteData.boss = inst.nextBoss(a);
+
+      // Voucher
+      const voucher = inst.nextVoucher(a);
+      anteData.voucher = voucher;
+      inst.lock(voucher);
+
+      // Unlock next level voucher
+      for (let i = 0; i < Immolate.VOUCHERS.size(); i += 2) {
+        if (
+          Immolate.VOUCHERS.get(i) === voucher &&
+          i + 1 < Immolate.VOUCHERS.size()
+        ) {
+          inst.unlock(Immolate.VOUCHERS.get(i + 1));
+          break;
+        }
+      }
+
+      // Tags
+      anteData.tag1 = inst.nextTag(a);
+      anteData.tag2 = inst.nextTag(a);
+
+      // Shop items (first few for search purposes)
+      if (!compact) {
+        anteData.shop = [];
+        for (let i = 1; i <= 80; i++) {
+          try {
+            const item = inst.nextShopItem(a);
+            // Handle undefined item names
+            const itemName = item.item || "Unknown Item";
+            let itemInfo = { name: itemName, type: item.type };
+
+            if (item.type === "Joker") {
+              itemInfo.eternal = item.jokerData.stickers.eternal;
+              itemInfo.perishable = item.jokerData.stickers.perishable;
+              itemInfo.rental = item.jokerData.stickers.rental;
+              itemInfo.edition = item.jokerData.edition;
+            } else {
+              // Non-joker items don't have editions/stickers
+              itemInfo.eternal = false;
+              itemInfo.perishable = false;
+              itemInfo.rental = false;
+              itemInfo.edition = "No Edition";
+            }
+
+            anteData.shop.push(itemInfo);
+            item.delete();
+          } catch (error) {
+            // If we hit memory issues, stop generating more items for this ante
+            console.warn(
+              `Memory error at shop item ${i} for seed ${seed}, ante ${a}: ${error.message}`
+            );
+            break;
+          }
+        }
+      }
+
+      // Packs analysis
+      if (!compact) {
+        anteData.packs = [];
+        const numPacks = a == 1 ? 4 : 6;
+
+        for (let p = 1; p <= numPacks; p++) {
+          try {
+            const packName = inst.nextPack(a);
+            const packInfo = Immolate.packInfo(packName);
+            let packData = { name: packName, cards: [] };
+
+            if (packInfo.type === "Celestial Pack") {
+              const cards = inst.nextCelestialPack(packInfo.size, a);
+              for (let c = 0; c < cards.size(); c++) {
+                packData.cards.push(cards.get(c));
+              }
+              cards.delete();
+            } else if (packInfo.type === "Arcana Pack") {
+              const cards = inst.nextArcanaPack(packInfo.size, a);
+              for (let c = 0; c < cards.size(); c++) {
+                packData.cards.push(cards.get(c));
+              }
+              cards.delete();
+            } else if (packInfo.type === "Spectral Pack") {
+              const cards = inst.nextSpectralPack(packInfo.size, a);
+              for (let c = 0; c < cards.size(); c++) {
+                packData.cards.push(cards.get(c));
+              }
+              cards.delete();
+            } else if (packInfo.type === "Buffoon Pack") {
+              const jokers = inst.nextBuffoonPack(
+                packInfo.size,
+                packInfo.choices,
+                a
+              );
+              for (let c = 0; c < jokers.size(); c++) {
+                const joker = jokers.get(c);
+                packData.cards.push(joker.joker);
+                joker.delete();
+              }
+              jokers.delete();
+            } else if (packInfo.type === "Standard Pack") {
+              const cards = inst.nextStandardPack(
+                packInfo.size,
+                packInfo.choices,
+                a,
+                false
+              );
+              for (let c = 0; c < packInfo.choices && c < cards.size(); c++) {
+                const card = cards.get(c);
+
+                // Convert card code to readable name
+                function formatCard(cardCode) {
+                  const [suit, rank] = cardCode.split("_");
+                  const suitNames = {
+                    C: "Clubs",
+                    D: "Diamonds",
+                    H: "Hearts",
+                    S: "Spades",
+                  };
+                  const rankNames = {
+                    A: "Ace",
+                    J: "Jack",
+                    Q: "Queen",
+                    K: "King",
+                  };
+                  const suitName = suitNames[suit] || suit;
+                  const rankName = rankNames[rank] || rank;
+                  return `${rankName} of ${suitName}`;
+                }
+
+                let cardDesc = formatCard(card.base);
+                if (card.seal !== "No Seal")
+                  cardDesc = `${card.seal} ${cardDesc}`;
+                if (card.enhancement !== "No Enhancement")
+                  cardDesc = `${card.enhancement} ${cardDesc}`;
+                if (card.edition !== "No Edition")
+                  cardDesc = `${card.edition} ${cardDesc}`;
+                packData.cards.push(cardDesc);
+              }
+              cards.delete();
+            }
+
+            packInfo.delete();
+            anteData.packs.push(packData);
+          } catch (error) {
+            console.warn(
+              `Memory error at pack ${p} for seed ${seed}, ante ${a}: ${error.message}`
+            );
+            break;
+          }
+        }
+      }
+
+      results.antes.push(anteData);
+    }
+
+    inst.delete();
+    return results;
+  } catch (error) {
+    console.error(`Error analyzing seed ${seed}:`, error.message);
+    return null;
+  }
+}
+
+function searchForItem(searchOptions) {
+  const {
+    find = [],
+    joker = [],
+    voucher = [],
+    boss = [],
+    tag = [],
+    max = 100,
+    early = null,
+    quiet = false,
+    deck = "Red Deck",
+    stake = "White Stake",
+    matchAll = false, // false = ANY (OR), true = ALL (AND)
+  } = searchOptions;
+
+  // Flatten arrays and filter out empty strings
+  const allTerms = [...find, ...joker, ...voucher, ...boss, ...tag].filter(
+    Boolean
+  );
+  if (allTerms.length === 0) {
+    console.error("Error: Must specify at least one search term");
+    return;
+  }
+
+  if (!quiet) {
+    const termsByType = [];
+    if (find.length) termsByType.push(`General: ${find.join(", ")}`);
+    if (joker.length) termsByType.push(`Jokers: ${joker.join(", ")}`);
+    if (voucher.length) termsByType.push(`Vouchers: ${voucher.join(", ")}`);
+    if (boss.length) termsByType.push(`Bosses: ${boss.join(", ")}`);
+    if (tag.length) termsByType.push(`Tags: ${tag.join(", ")}`);
+
+    console.log(`Searching for: ${termsByType.join(" | ")}`);
+    console.log(`Match logic: ${matchAll ? "ALL (AND)" : "ANY (OR)"}`);
+    console.log(`Max seeds: ${max}`);
+    console.log(`Deck: ${deck}, Stake: ${stake}`);
+    if (early) console.log(`Early exit: Ante ${early}`);
+    console.log("");
+  }
+
+  let seedsChecked = 0;
+  let matches = [];
+
+  while (seedsChecked < max) {
+    const seed = generateSeed();
+    seedsChecked++;
+
+    if (!quiet && seedsChecked % 10 === 0) {
+      process.stdout.write(`\rChecked ${seedsChecked}/${max} seeds...`);
+    }
+
+    const results = analyzeSeed(seed, {
+      ante: early || 8,
+      deck: deck,
+      stake: stake,
+      compact: false, // Need shop data for search
+    });
+
+    if (!results) continue;
+
+    // Check for matches - collect all matches first
+    let foundMatches = new Set(); // Track which criteria we've matched
+    let matchDetails = [];
+
+    for (const anteData of results.antes) {
+      // Check bosses
+      for (const bossSearch of boss) {
+        if (anteData.boss.toLowerCase().includes(bossSearch.toLowerCase())) {
+          foundMatches.add(`boss:${bossSearch}`);
+          matchDetails.push(`Boss: ${anteData.boss} (Ante ${anteData.ante})`);
+        }
+      }
+
+      // Check vouchers
+      for (const voucherSearch of voucher) {
+        if (
+          anteData.voucher.toLowerCase().includes(voucherSearch.toLowerCase())
+        ) {
+          foundMatches.add(`voucher:${voucherSearch}`);
+          matchDetails.push(
+            `Voucher: ${anteData.voucher} (Ante ${anteData.ante})`
+          );
+        }
+      }
+
+      // Check tags
+      for (const tagSearch of tag) {
+        if (anteData.tag1.toLowerCase().includes(tagSearch.toLowerCase())) {
+          foundMatches.add(`tag:${tagSearch}`);
+          matchDetails.push(`Tag: ${anteData.tag1} (Ante ${anteData.ante})`);
+        }
+        if (anteData.tag2.toLowerCase().includes(tagSearch.toLowerCase())) {
+          foundMatches.add(`tag:${tagSearch}`);
+          matchDetails.push(`Tag: ${anteData.tag2} (Ante ${anteData.ante})`);
+        }
+      }
+
+      // Check shop items
+      if (anteData.shop) {
+        for (const item of anteData.shop) {
+          // Check jokers
+          for (const jokerSearch of joker) {
+            if (item.type === "Joker") {
+              // Build full joker description first
+              let itemDesc = item.name;
+              if (item.edition !== "No Edition")
+                itemDesc = `${item.edition} ${itemDesc}`;
+              if (item.eternal) itemDesc = `Eternal ${itemDesc}`;
+              if (item.perishable) itemDesc = `Perishable ${itemDesc}`;
+              if (item.rental) itemDesc = `Rental ${itemDesc}`;
+
+              // Search against the full description
+              if (itemDesc.toLowerCase().includes(jokerSearch.toLowerCase())) {
+                foundMatches.add(`joker:${jokerSearch}`);
+                matchDetails.push(`Joker: ${itemDesc} (Ante ${anteData.ante})`);
+              }
+            }
+          }
+
+          // Check general find
+          for (const findSearch of find) {
+            if (item.name.toLowerCase().includes(findSearch.toLowerCase())) {
+              foundMatches.add(`find:${findSearch}`);
+              matchDetails.push(`Item: ${item.name} (Ante ${anteData.ante})`);
+            }
+          }
+        }
+      }
+
+      // Check pack items
+      if (anteData.packs) {
+        for (const pack of anteData.packs) {
+          for (const card of pack.cards) {
+            // Skip undefined/null cards
+            if (!card || typeof card !== "string") continue;
+
+            // Check general find in pack cards
+            for (const findSearch of find) {
+              if (card.toLowerCase().includes(findSearch.toLowerCase())) {
+                foundMatches.add(`find:${findSearch}`);
+                matchDetails.push(
+                  `Pack Card: ${card} from ${pack.name} (Ante ${anteData.ante})`
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Determine if this seed matches our criteria
+    const totalCriteria =
+      find.length + joker.length + voucher.length + boss.length + tag.length;
+    const matchedCriteria = foundMatches.size;
+
+    let matched = false;
+    if (matchAll) {
+      // AND logic - need to match ALL criteria
+      matched = matchedCriteria === totalCriteria;
+    } else {
+      // OR logic - need to match ANY criteria
+      matched = matchedCriteria > 0;
+    }
+
+    if (matched) {
+      matches.push({ seed, details: matchDetails });
+      if (!quiet) {
+        process.stdout.write("\r" + " ".repeat(50) + "\r"); // Clear progress line
+      }
+      console.log(`\n🎯 MATCH FOUND: ${seed}`);
+      matchDetails.forEach((detail) => console.log(`  └─ ${detail}`));
+      console.log("");
+
+      // For now, continue searching (could add --first flag to stop at first match)
+    }
+  }
+
+  if (!quiet) {
+    process.stdout.write("\r" + " ".repeat(50) + "\r"); // Clear progress line
+  }
+
+  console.log(`\nSearch complete! Checked ${seedsChecked} seeds.`);
+  console.log(`Found ${matches.length} matching seeds.`);
+
+  if (matches.length > 0) {
+    console.log("\nAll matches:");
+    matches.forEach((match) => {
+      console.log(`${match.seed}: ${match.details.join(", ")}`);
+    });
+  }
+}
+
+// Parse arguments
+const args = process.argv.slice(2);
+
+if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
+  printHelp();
+  process.exit(0);
+}
+
+// Wait for WebAssembly to load
+setTimeout(() => {
+  if (!global.Immolate.Instance) {
+    console.error("Error: WebAssembly module failed to load");
+    process.exit(1);
+  }
+
+  try {
+    if (args.includes("--search")) {
+      // Search mode
+      const searchOptions = {
+        find: [],
+        joker: [],
+        voucher: [],
+        boss: [],
+        tag: [],
+        matchAll: false,
+      };
+
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        switch (arg) {
+          case "--find":
+            searchOptions.find.push(args[++i]);
+            break;
+          case "--joker":
+            searchOptions.joker.push(args[++i]);
+            break;
+          case "--voucher":
+            searchOptions.voucher.push(args[++i]);
+            break;
+          case "--boss":
+            searchOptions.boss.push(args[++i]);
+            break;
+          case "--tag":
+            searchOptions.tag.push(args[++i]);
+            break;
+          case "--max":
+            searchOptions.max = parseInt(args[++i]);
+            break;
+          case "--early":
+            searchOptions.early = parseInt(args[++i]);
+            break;
+          case "--deck":
+          case "-d":
+            searchOptions.deck = args[++i] + " Deck";
+            break;
+          case "--stake":
+          case "-s":
+            searchOptions.stake = args[++i] + " Stake";
+            break;
+          case "--quiet":
+          case "-q":
+            searchOptions.quiet = true;
+            break;
+          case "--all":
+            searchOptions.matchAll = true;
+            break;
+          case "--any":
+            searchOptions.matchAll = false;
+            break;
+        }
+      }
+
+      searchForItem(searchOptions);
+    } else {
+      // Single seed analysis
+      const seed = args[0].toUpperCase().replace(/0/g, "O");
+      const options = {};
+
+      for (let i = 1; i < args.length; i++) {
+        const arg = args[i];
+        switch (arg) {
+          case "--ante":
+          case "-a":
+            options.ante = parseInt(args[++i]);
+            break;
+          case "--deck":
+          case "-d":
+            options.deck = args[++i] + " Deck";
+            break;
+          case "--stake":
+          case "-s":
+            options.stake = args[++i] + " Stake";
+            break;
+          case "--compact":
+            options.compact = true;
+            break;
+        }
+      }
+
+      const results = analyzeSeed(seed, options);
+      if (results) {
+        // console.log(JSON.stringify(results, null, 2));
+        console.log(`\nSeed: ${results.seed}`);
+        console.log(`Deck: ${results.deck}, Stake: ${results.stake}`);
+        console.log("=".repeat(50));
+
+        results.antes.forEach((ante) => {
+          console.log(`\nAnte ${ante.ante}:`);
+          console.log(`  Boss: ${ante.boss}`);
+          console.log(`  Voucher: ${ante.voucher}`);
+          console.log(`  Tags: ${ante.tag1}, ${ante.tag2}`);
+
+          if (ante.shop && !options.compact) {
+            console.log(`  Shop (first 80):`);
+            ante.shop.forEach((item, i) => {
+              let desc = item.name;
+              if (item.edition !== "No Edition")
+                desc = `${item.edition} ${desc}`;
+              if (item.eternal) desc = `Eternal ${desc}`;
+              if (item.perishable) desc = `Perishable ${desc}`;
+              if (item.rental) desc = `Rental ${desc}`;
+              console.log(`    ${i + 1}) ${desc}`);
+            });
+          }
+
+          if (ante.packs && !options.compact) {
+            console.log(`  Packs:`);
+            ante.packs.forEach((pack, i) => {
+              console.log(
+                `    ${i + 1}) ${pack.name} - ${pack.cards.join(", ")}`
+              );
+            });
+          }
+        });
+      }
+    }
+  } catch (error) {
+    console.error("Error:", error.message);
+    process.exit(1);
+  }
+}, 100); // Small delay for WASM to load
