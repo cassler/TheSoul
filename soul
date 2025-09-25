@@ -187,7 +187,23 @@ function analyzeSeed(seed, options = {}) {
             } else if (packInfo.type === "Arcana Pack") {
               const cards = inst.nextArcanaPack(packInfo.size, a);
               for (let c = 0; c < cards.size(); c++) {
-                packData.cards.push(cards.get(c));
+                const cardName = cards.get(c);
+                if (cardName === "The Soul") {
+                  // The Soul creates a legendary joker - determine which one
+                  const legendaryJoker = inst.nextJoker("sou", a, true);
+
+                  // Build full joker description including edition and stickers
+                  let jokerDesc = legendaryJoker.joker;
+                  if (legendaryJoker.edition !== "No Edition") jokerDesc = `${legendaryJoker.edition} ${jokerDesc}`;
+                  if (legendaryJoker.stickers.eternal) jokerDesc = `Eternal ${jokerDesc}`;
+                  if (legendaryJoker.stickers.perishable) jokerDesc = `Perishable ${jokerDesc}`;
+                  if (legendaryJoker.stickers.rental) jokerDesc = `Rental ${jokerDesc}`;
+
+                  packData.cards.push(`${cardName} (creates ${jokerDesc})`);
+                  legendaryJoker.delete();
+                } else {
+                  packData.cards.push(cardName);
+                }
               }
               cards.delete();
             } else if (packInfo.type === "Spectral Pack") {
