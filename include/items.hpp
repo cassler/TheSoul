@@ -1,3 +1,6 @@
+#ifndef ITEMS_HPP
+#define ITEMS_HPP
+
 #include <string>
 #include <vector>
 
@@ -781,3 +784,5 @@ std::vector<std::string> BOSSES = {
     "The Wheel",
     "The Window"
 };
+
+#endif // ITEMS_HPP

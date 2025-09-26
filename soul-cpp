@@ -1,0 +1,386 @@
+#!/usr/bin/env node
+
+// The Soul - C++ Based CLI Analyzer
+
+global.Immolate = {};
+require("./immolate.js");
+
+function printHelp() {
+  console.log(`
+The Soul - C++ Based CLI Seed Analyzer
+
+Usage: ./soul-cpp [SEED] [OPTIONS]
+       ./soul-cpp --search [SEARCH_OPTIONS]
+
+Single Seed Analysis:
+  ./soul-cpp SEED123                    # Analyze one seed
+  ./soul-cpp MYSEED -a 5 -d Blue        # Custom ante/deck
+
+Search Mode:
+  ./soul-cpp --search --find DNA        # Search for any item containing "DNA"
+  ./soul-cpp --search --joker "Joker"   # Search for specific joker
+  --search                              # Enable search mode
+  --find <text>                         # Search for any item (can use multiple times)
+  --joker <name>                        # Search for joker (can use multiple times)
+  --voucher <name>                      # Search for voucher (can use multiple times)
+  --boss <name>                         # Search for boss (can use multiple times)
+  --tag <name>                          # Search for tag (can use multiple times)
+  --max <num>                           # Max seeds to check (default: 5000)
+  --ante <num>                          # Max ante (default: 8)
+  --early <num>                         # Stop searching after this ante
+  --deck <name>                         # Deck (Red/Blue/Yellow/Green/Black/Magic/etc)
+  --stake <name>                        # Stake (White/Red/Green/Black/Blue/Purple/Orange/Gold)
+  --all                                 # Match ALL search terms (default: ANY)
+  --first                               # Stop on first match
+  --unlimited                           # Keep searching indefinitely
+  --threads <num>                       # Number of threads to use (default: 1)
+  --shop-limit <numbers>                # Shop items per ante [20,40,60,75,75,75,75,75] (default)
+`);
+}
+
+const args = process.argv.slice(2);
+if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
+  printHelp();
+  process.exit(0);
+}
+
+// Wait for WebAssembly to load
+setTimeout(async () => {
+  if (!global.Immolate.SearchOptions) {
+    console.error("Error: WebAssembly module failed to load");
+    process.exit(1);
+  }
+
+  try {
+    if (args.includes("--search")) {
+      // Create search options object
+      const searchOptions = new Immolate.SearchOptions();
+
+      // Create temporary arrays to collect terms
+      const findTerms = [];
+      const jokerTerms = [];
+      const voucherTerms = [];
+      const bossTerms = [];
+      const tagTerms = [];
+
+      // Parse command line arguments
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        switch (arg) {
+          case "--find":
+            findTerms.push(args[++i]);
+            break;
+          case "--joker":
+            jokerTerms.push(args[++i]);
+            break;
+          case "--voucher":
+            voucherTerms.push(args[++i]);
+            break;
+          case "--boss":
+            bossTerms.push(args[++i]);
+            break;
+          case "--tag":
+            tagTerms.push(args[++i]);
+            break;
+          case "--max":
+            searchOptions.maxSeeds = parseInt(args[++i]);
+            break;
+          case "--ante":
+            searchOptions.maxAnte = parseInt(args[++i]);
+            break;
+          case "--early":
+            searchOptions.earlyExit = parseInt(args[++i]);
+            break;
+          case "--deck":
+          case "-d":
+            searchOptions.deck = args[++i] + " Deck";
+            break;
+          case "--stake":
+          case "-s":
+            searchOptions.stake = args[++i] + " Stake";
+            break;
+          case "--all":
+            searchOptions.matchAll = true;
+            break;
+          case "--first":
+            searchOptions.stopOnFirst = true;
+            break;
+          case "--unlimited":
+            searchOptions.unlimited = true;
+            break;
+          case "--threads":
+            searchOptions.threads = parseInt(args[++i]);
+            break;
+          case "--shop-limit":
+            try {
+              const limits = JSON.parse(args[++i]);
+              searchOptions.shopLimits.clear();
+              limits.forEach(limit => searchOptions.shopLimits.push_back(limit));
+            } catch (e) {
+              console.error("Error: --shop-limit must be a valid JSON array like [20,40,60,75]");
+              process.exit(1);
+            }
+            break;
+        }
+      }
+
+      // Transfer terms to searchOptions vectors
+      // We need to create new vectors and assign them
+      const findVec = new Immolate.VectorStr();
+      findTerms.forEach(term => findVec.push_back(term));
+      searchOptions.findTerms = findVec;
+
+      const jokerVec = new Immolate.VectorStr();
+      jokerTerms.forEach(term => jokerVec.push_back(term));
+      searchOptions.jokerTerms = jokerVec;
+
+      const voucherVec = new Immolate.VectorStr();
+      voucherTerms.forEach(term => voucherVec.push_back(term));
+      searchOptions.voucherTerms = voucherVec;
+
+      const bossVec = new Immolate.VectorStr();
+      bossTerms.forEach(term => bossVec.push_back(term));
+      searchOptions.bossTerms = bossVec;
+
+      const tagVec = new Immolate.VectorStr();
+      tagTerms.forEach(term => tagVec.push_back(term));
+      searchOptions.tagTerms = tagVec;
+
+      // Display search parameters
+      const allTerms = [];
+      // Check if vectors exist and have size() method
+      const findSize = searchOptions.findTerms.size ? searchOptions.findTerms.size() : 0;
+      const jokerSize = searchOptions.jokerTerms.size ? searchOptions.jokerTerms.size() : 0;
+      const voucherSize = searchOptions.voucherTerms.size ? searchOptions.voucherTerms.size() : 0;
+      const bossSize = searchOptions.bossTerms.size ? searchOptions.bossTerms.size() : 0;
+      const tagSize = searchOptions.tagTerms.size ? searchOptions.tagTerms.size() : 0;
+
+      for (let i = 0; i < findSize; i++) {
+        allTerms.push("General: " + searchOptions.findTerms.get(i));
+      }
+      for (let i = 0; i < jokerSize; i++) {
+        allTerms.push("Jokers: " + searchOptions.jokerTerms.get(i));
+      }
+      for (let i = 0; i < voucherSize; i++) {
+        allTerms.push("Vouchers: " + searchOptions.voucherTerms.get(i));
+      }
+      for (let i = 0; i < bossSize; i++) {
+        allTerms.push("Bosses: " + searchOptions.bossTerms.get(i));
+      }
+      for (let i = 0; i < tagSize; i++) {
+        allTerms.push("Tags: " + searchOptions.tagTerms.get(i));
+      }
+
+      console.log(`Searching for: ${allTerms.join(", ") || "Any items"}`);
+      console.log(`Match logic: ${searchOptions.matchAll ? "ALL (AND)" : "ANY (OR)"}`);
+      if (searchOptions.unlimited) {
+        console.log(`Mode: Unlimited search`);
+      } else {
+        console.log(`Max seeds: ${searchOptions.maxSeeds}`);
+      }
+      console.log(`Threads: ${searchOptions.threads}`);
+      console.log(`Deck: ${searchOptions.deck}, Stake: ${searchOptions.stake}`);
+      if (searchOptions.earlyExit > 0) {
+        console.log(`Early exit: Ante ${searchOptions.earlyExit}`);
+      }
+      console.log("");
+
+      // Perform search with progress updates
+      const startTime = Date.now();
+      let lastSeedsChecked = 0;
+
+      // Progress updates every 2 seconds
+      const progressInterval = setInterval(() => {
+        const seedsChecked = Immolate.getSeedsChecked();
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        if (seedsChecked > lastSeedsChecked) {
+          process.stdout.write(`\r🔍 Checked ${seedsChecked} seeds in ${elapsed}s...`);
+          lastSeedsChecked = seedsChecked;
+        }
+      }, 2000);
+
+      const matches = Immolate.searchSeeds(searchOptions);
+
+      // Clear progress line
+      clearInterval(progressInterval);
+      process.stdout.write('\r' + ' '.repeat(60) + '\r');
+
+      // Display results
+      for (let i = 0; i < matches.size(); i++) {
+        const match = matches.get(i);
+        console.log(`\n🎯 MATCH FOUND: ${match.seed}`);
+
+        // Display match details in table format
+        if (match.details.size() > 0) {
+          const rows = [];
+          for (let j = 0; j < match.details.size(); j++) {
+            const detail = match.details.get(j);
+            rows.push({
+              type: detail.type,
+              name: detail.name,
+              ante: detail.ante.toString(),
+              slot: detail.slot > 0 ? detail.slot.toString() : '-',
+              extra: detail.extra
+            });
+          }
+
+          // Calculate column widths
+          const typeWidth = Math.max(4, ...rows.map(r => r.type.length));
+          const nameWidth = Math.max(4, ...rows.map(r => r.name.length));
+          const anteWidth = 4;
+          const slotWidth = 4;
+
+          // Create table
+          const separator = `├${'─'.repeat(typeWidth + 2)}┼${'─'.repeat(nameWidth + 2)}┼${'─'.repeat(anteWidth + 2)}┼${'─'.repeat(slotWidth + 2)}┤`;
+          const topBorder = `┌${'─'.repeat(typeWidth + 2)}┬${'─'.repeat(nameWidth + 2)}┬${'─'.repeat(anteWidth + 2)}┬${'─'.repeat(slotWidth + 2)}┐`;
+          const bottomBorder = `└${'─'.repeat(typeWidth + 2)}┴${'─'.repeat(nameWidth + 2)}┴${'─'.repeat(anteWidth + 2)}┴${'─'.repeat(slotWidth + 2)}┘`;
+
+          console.log(topBorder);
+          console.log(`│ ${'Type'.padEnd(typeWidth)} │ ${'Name'.padEnd(nameWidth)} │ ${'Ante'.padEnd(anteWidth)} │ ${'Slot'.padEnd(slotWidth)} │`);
+          console.log(separator);
+
+          rows.forEach(row => {
+            console.log(`│ ${row.type.padEnd(typeWidth)} │ ${row.name.padEnd(nameWidth)} │ ${row.ante.padEnd(anteWidth)} │ ${row.slot.padEnd(slotWidth)} │`);
+          });
+
+          console.log(bottomBorder);
+        }
+
+        // Clean up match object
+        match.delete();
+      }
+
+      const elapsed = Date.now() - startTime;
+      console.log(`\nSearch complete in ${(elapsed / 1000).toFixed(1)}s`);
+      console.log(`Found ${matches.size()} matching seeds`);
+
+      // Note: We need to add a way to get seeds checked count from C++
+      // For now, this is a placeholder
+
+      if (searchOptions.stopOnFirst && matches.size() > 0) {
+        console.log("🛑 Stopped after first match (--first flag)");
+        process.exit(0);
+      }
+
+      // Clean up
+      matches.delete();
+      searchOptions.delete();
+    } else {
+      // Single seed analysis mode
+      const seed = args[0].toUpperCase();
+      const options = new Immolate.SearchOptions();
+
+      // Parse options
+      for (let i = 1; i < args.length; i++) {
+        const arg = args[i];
+        switch (arg) {
+          case "--ante":
+          case "-a":
+            options.maxAnte = parseInt(args[++i]);
+            break;
+          case "--deck":
+          case "-d":
+            options.deck = args[++i] + " Deck";
+            break;
+          case "--stake":
+          case "-s":
+            options.stake = args[++i] + " Stake";
+            break;
+          case "--shop-limit":
+            try {
+              const limits = JSON.parse(args[++i]);
+              options.shopLimits.clear();
+              limits.forEach(limit => options.shopLimits.push(limit));
+            } catch (e) {
+              console.error("Error: --shop-limit must be a valid JSON array like [20,40,60,75]");
+              process.exit(1);
+            }
+            break;
+        }
+      }
+
+      // Analyze single seed
+      const result = Immolate.analyzeSeedForSearch(seed, options);
+
+      console.log(`\nSeed: ${result.seed}`);
+      console.log(`Deck: ${options.deck}, Stake: ${options.stake}`);
+      console.log("=".repeat(50));
+
+      // Group details by ante
+      const anteGroups = {};
+      for (let i = 0; i < result.details.size(); i++) {
+        const detail = result.details.get(i);
+        if (!anteGroups[detail.ante]) {
+          anteGroups[detail.ante] = {
+            boss: null,
+            voucher: null,
+            tags: [],
+            shop: [],
+            packs: []
+          };
+        }
+
+        if (detail.type === "Boss") {
+          anteGroups[detail.ante].boss = detail.name;
+        } else if (detail.type === "Voucher") {
+          anteGroups[detail.ante].voucher = detail.name;
+        } else if (detail.type === "Tag") {
+          anteGroups[detail.ante].tags.push(detail.name);
+        } else if (detail.type === "Joker" || detail.type === "Item") {
+          anteGroups[detail.ante].shop.push({
+            slot: detail.slot,
+            name: detail.name
+          });
+        } else if (detail.type === "Pack") {
+          anteGroups[detail.ante].packs.push({
+            name: detail.extra,
+            card: detail.name
+          });
+        }
+      }
+
+      // Display by ante
+      for (let ante = 1; ante <= options.maxAnte; ante++) {
+        if (anteGroups[ante]) {
+          const group = anteGroups[ante];
+          console.log(`\nAnte ${ante}:`);
+          if (group.boss) console.log(`  Boss: ${group.boss}`);
+          if (group.voucher) console.log(`  Voucher: ${group.voucher}`);
+          if (group.tags.length > 0) console.log(`  Tags: ${group.tags.join(", ")}`);
+
+          if (group.shop.length > 0) {
+            console.log(`  Shop (first ${group.shop.length}):`);
+            group.shop.sort((a, b) => a.slot - b.slot);
+            group.shop.forEach(item => {
+              console.log(`    ${item.slot}) ${item.name}`);
+            });
+          }
+
+          // Group packs by name
+          if (group.packs.length > 0) {
+            const packsByName = {};
+            group.packs.forEach(pack => {
+              if (!packsByName[pack.name]) {
+                packsByName[pack.name] = [];
+              }
+              packsByName[pack.name].push(pack.card);
+            });
+
+            console.log("  Packs:");
+            let packNum = 1;
+            for (const [packName, cards] of Object.entries(packsByName)) {
+              console.log(`    ${packNum++}) ${packName} - ${cards.join(", ")}`);
+            }
+          }
+        }
+      }
+
+      // Clean up
+      result.delete();
+      options.delete();
+    }
+  } catch (error) {
+    console.error("Error:", error.message);
+    process.exit(1);
+  }
+}, 100);

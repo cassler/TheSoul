@@ -1,3 +1,6 @@
+#ifndef UTIL_HPP
+#define UTIL_HPP
+
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -94,3 +97,4 @@ double round13(double x) {
     }
     return tentative;
 }
+#endif // UTIL_HPP

@@ -2,6 +2,7 @@
 #include "items.hpp"
 #include "instance.hpp"
 #include "functions.hpp"
+#include "search.hpp"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/bind.h>
@@ -122,5 +123,46 @@ EMSCRIPTEN_BINDINGS(Immolate) {
         .constructor<>()
         .constructor<double>()
         .function("random", &LuaRandom::random);
+
+    //search.hpp
+    register_vector<MatchDetail>("VectorMatchDetail");
+    register_vector<SeedMatch>("VectorSeedMatch");
+    register_vector<int>("VectorInt");
+
+    class_<MatchDetail>("MatchDetail")
+        .constructor<>()
+        .property("type", &MatchDetail::type)
+        .property("name", &MatchDetail::name)
+        .property("ante", &MatchDetail::ante)
+        .property("slot", &MatchDetail::slot)
+        .property("extra", &MatchDetail::extra);
+
+    class_<SeedMatch>("SeedMatch")
+        .constructor<>()
+        .property("seed", &SeedMatch::seed)
+        .property("details", &SeedMatch::details);
+
+    class_<SearchOptions>("SearchOptions")
+        .constructor<>()
+        .property("findTerms", &SearchOptions::findTerms)
+        .property("jokerTerms", &SearchOptions::jokerTerms)
+        .property("voucherTerms", &SearchOptions::voucherTerms)
+        .property("bossTerms", &SearchOptions::bossTerms)
+        .property("tagTerms", &SearchOptions::tagTerms)
+        .property("deck", &SearchOptions::deck)
+        .property("stake", &SearchOptions::stake)
+        .property("maxSeeds", &SearchOptions::maxSeeds)
+        .property("maxAnte", &SearchOptions::maxAnte)
+        .property("earlyExit", &SearchOptions::earlyExit)
+        .property("matchAll", &SearchOptions::matchAll)
+        .property("stopOnFirst", &SearchOptions::stopOnFirst)
+        .property("unlimited", &SearchOptions::unlimited)
+        .property("threads", &SearchOptions::threads)
+        .property("shopLimits", &SearchOptions::shopLimits);
+
+    function("searchSeeds", &searchSeeds);
+    function("analyzeSeedForSearch", &analyzeSeedForSearch);
+    function("generateRandomSeed", &generateRandomSeed);
+    function("getSeedsChecked", &getSeedsChecked);
 }
 #endif

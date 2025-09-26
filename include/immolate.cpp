@@ -1,5 +1,6 @@
 #include <iostream>
 #include "immolate.hpp"
+#include "search.cpp"
 
 int main() {
     /*Instance inst("IMMOLATE");

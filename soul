@@ -18,6 +18,7 @@ Single Seed Analysis:
   --ante, -a <num>                  # Max ante (default: 8)
   --deck, -d <name>                 # Deck (Red/Blue/Yellow/Green/Black/Magic/etc)
   --stake, -s <name>                # Stake (White/Red/Green/Black/Blue/Purple/Orange/Gold)
+  --shop-limit <numbers>            # Shop items per ante [20,40,60,75,75,75,75,75] (default)
   --compact                         # Show only boss/voucher/first tag
 
 Search Mode:
@@ -31,6 +32,10 @@ Search Mode:
   --boss <name>                     # Search specifically for boss (can use multiple times)
   --tag <name>                      # Search specifically for tag (can use multiple times)
   --max <num>                       # Max seeds to check (default: 100)
+  --unlimited                       # Search indefinitely (until Ctrl+C)
+  --first, --stop                   # Stop after finding first match
+  --save <file>                     # Save matches to file as found
+  --progress <num>                  # Progress update interval for unlimited (default: 1000)
   --early <num>                     # Only check up to this ante (faster)
   --quiet, -q                       # Only show matches
   --any                             # Match ANY criteria (OR logic, default)
@@ -47,6 +52,11 @@ Multiple Item Search:
   ./soul --search --joker "DNA" --joker "Perkeo" --all        # Both DNA AND Perkeo
   ./soul --search --tag "Polychrome" --voucher "Overstock" --all  # Polychrome tag AND Overstock
   ./soul --search --boss "The Hook" --joker "DNA" --any       # The Hook boss OR DNA joker
+
+Brute Force Search (for very rare items):
+  ./soul --search --find "Negative Perkeo" --unlimited --save matches.txt
+  ./soul --search --joker "DNA" --voucher "Overstock" --unlimited --progress 500
+  ./soul --search --find "Negative Perkeo" --unlimited --first  # Stop at first match
 `);
 }
 
@@ -60,12 +70,110 @@ function generateSeed() {
   return seed;
 }
 
+function displayMatchTable(matchDetails) {
+  if (matchDetails.length === 0) return;
+
+  // Parse match details to extract structured data
+  const rows = matchDetails.map((detail) => {
+    // Parse different types: "Boss: X (Ante Y)", "Joker: X (Ante Y, Shop slot Z)", "Pack Card: X from Y (Ante Z)"
+    const bossMatch = detail.match(/^Boss: (.+) \(Ante (\d+)\)$/);
+    const voucherMatch = detail.match(/^Voucher: (.+) \(Ante (\d+)\)$/);
+    const tagMatch = detail.match(/^Tag: (.+) \(Ante (\d+)\)$/);
+    const jokerMatch = detail.match(
+      /^Joker: (.+) \(Ante (\d+), Shop slot (\d+)\)$/
+    );
+    const itemMatch = detail.match(
+      /^Item: (.+) \(Ante (\d+), Shop slot (\d+)\)$/
+    );
+    const packMatch = detail.match(
+      /^Pack Card: (.+) from (.+) \(Ante (\d+)\)$/
+    );
+
+    if (bossMatch) {
+      return {
+        type: "Boss",
+        name: bossMatch[1],
+        ante: bossMatch[2],
+        slot: "-",
+      };
+    } else if (voucherMatch) {
+      return {
+        type: "Voucher",
+        name: voucherMatch[1],
+        ante: voucherMatch[2],
+        slot: "-",
+      };
+    } else if (tagMatch) {
+      return { type: "Tag", name: tagMatch[1], ante: tagMatch[2], slot: "-" };
+    } else if (jokerMatch) {
+      return {
+        type: "Joker",
+        name: jokerMatch[1],
+        ante: jokerMatch[2],
+        slot: jokerMatch[3],
+      };
+    } else if (itemMatch) {
+      return {
+        type: "Item",
+        name: itemMatch[1],
+        ante: itemMatch[2],
+        slot: itemMatch[3],
+      };
+    } else if (packMatch) {
+      return {
+        type: "Pack",
+        name: `${packMatch[1]} (${packMatch[2]})`,
+        ante: packMatch[3],
+        slot: "-",
+      };
+    } else {
+      return { type: "Other", name: detail, ante: "-", slot: "-" };
+    }
+  });
+
+  // Calculate column widths
+  const typeWidth = Math.max(4, ...rows.map((r) => r.type.length));
+  const nameWidth = Math.max(4, ...rows.map((r) => r.name.length));
+  const anteWidth = 4;
+  const slotWidth = 4;
+
+  // Create table header
+  const separator = `├${"─".repeat(typeWidth + 2)}┼${"─".repeat(
+    nameWidth + 2
+  )}┼${"─".repeat(anteWidth + 2)}┼${"─".repeat(slotWidth + 2)}┤`;
+  const topBorder = `┌${"─".repeat(typeWidth + 2)}┬${"─".repeat(
+    nameWidth + 2
+  )}┬${"─".repeat(anteWidth + 2)}┬${"─".repeat(slotWidth + 2)}┐`;
+  const bottomBorder = `└${"─".repeat(typeWidth + 2)}┴${"─".repeat(
+    nameWidth + 2
+  )}┴${"─".repeat(anteWidth + 2)}┴${"─".repeat(slotWidth + 2)}┘`;
+
+  console.log(topBorder);
+  console.log(
+    `│ ${"Type".padEnd(typeWidth)} │ ${"Name".padEnd(
+      nameWidth
+    )} │ ${"Ante".padEnd(anteWidth)} │ ${"Slot".padEnd(slotWidth)} │`
+  );
+  console.log(separator);
+
+  rows.forEach((row) => {
+    console.log(
+      `│ ${row.type.padEnd(typeWidth)} │ ${row.name.padEnd(
+        nameWidth
+      )} │ ${row.ante.padEnd(anteWidth)} │ ${row.slot.padEnd(slotWidth)} │`
+    );
+  });
+
+  console.log(bottomBorder);
+}
+
 function analyzeSeed(seed, options = {}) {
   const {
     ante = 8,
     deck = "Red Deck",
     stake = "White Stake",
     compact = false,
+    shopLimit = [20, 40, 60, 75, 75, 75, 75, 75],
   } = options;
 
   try {
@@ -132,10 +240,34 @@ function analyzeSeed(seed, options = {}) {
       anteData.tag1 = inst.nextTag(a);
       anteData.tag2 = inst.nextTag(a);
 
+      // Check if tags will add specific jokers to next shop
+      if (a < ante) {  // Only check if there's a next ante
+        if (anteData.tag1 === "Uncommon Tag") {
+          const uncommonJoker = inst.nextJoker("unc", a + 1, false);
+          anteData.tag1 += ` (adds ${uncommonJoker.joker})`;
+          uncommonJoker.delete();
+        } else if (anteData.tag1 === "Rare Tag") {
+          const rareJoker = inst.nextJoker("rar", a + 1, false);
+          anteData.tag1 += ` (adds ${rareJoker.joker})`;
+          rareJoker.delete();
+        }
+
+        if (anteData.tag2 === "Uncommon Tag") {
+          const uncommonJoker = inst.nextJoker("unc", a + 1, false);
+          anteData.tag2 += ` (adds ${uncommonJoker.joker})`;
+          uncommonJoker.delete();
+        } else if (anteData.tag2 === "Rare Tag") {
+          const rareJoker = inst.nextJoker("rar", a + 1, false);
+          anteData.tag2 += ` (adds ${rareJoker.joker})`;
+          rareJoker.delete();
+        }
+      }
+
       // Shop items (first few for search purposes)
       if (!compact) {
         anteData.shop = [];
-        for (let i = 1; i <= 80; i++) {
+        const shopItemLimit = options.shopLimit ? (options.shopLimit[a - 1] || options.shopLimit[options.shopLimit.length - 1] || 80) : (shopLimit[a - 1] || shopLimit[shopLimit.length - 1] || 80);
+        for (let i = 1; i <= shopItemLimit; i++) {
           try {
             const item = inst.nextShopItem(a);
             // Handle undefined item names
@@ -194,10 +326,14 @@ function analyzeSeed(seed, options = {}) {
 
                   // Build full joker description including edition and stickers
                   let jokerDesc = legendaryJoker.joker;
-                  if (legendaryJoker.edition !== "No Edition") jokerDesc = `${legendaryJoker.edition} ${jokerDesc}`;
-                  if (legendaryJoker.stickers.eternal) jokerDesc = `Eternal ${jokerDesc}`;
-                  if (legendaryJoker.stickers.perishable) jokerDesc = `Perishable ${jokerDesc}`;
-                  if (legendaryJoker.stickers.rental) jokerDesc = `Rental ${jokerDesc}`;
+                  if (legendaryJoker.edition !== "No Edition")
+                    jokerDesc = `${legendaryJoker.edition} ${jokerDesc}`;
+                  if (legendaryJoker.stickers.eternal)
+                    jokerDesc = `Eternal ${jokerDesc}`;
+                  if (legendaryJoker.stickers.perishable)
+                    jokerDesc = `Perishable ${jokerDesc}`;
+                  if (legendaryJoker.stickers.rental)
+                    jokerDesc = `Rental ${jokerDesc}`;
 
                   packData.cards.push(`${cardName} (creates ${jokerDesc})`);
                   legendaryJoker.delete();
@@ -288,19 +424,22 @@ function analyzeSeed(seed, options = {}) {
   }
 }
 
-function searchForItem(searchOptions) {
+async function searchForItem(searchOptions) {
   const {
     find = [],
     joker = [],
     voucher = [],
     boss = [],
     tag = [],
-    max = 100,
+    max = 5000,
     early = null,
     quiet = false,
-    deck = "Red Deck",
+    deck = "Ghost Deck",
     stake = "White Stake",
-    matchAll = false, // false = ANY (OR), true = ALL (AND)
+    matchAll = true, // false = ANY (OR), true = ALL (AND)
+    saveFile = null,
+    progressInterval = 1000,
+    stopOnFirst = false,
   } = searchOptions;
 
   // Flatten arrays and filter out empty strings
@@ -322,146 +461,260 @@ function searchForItem(searchOptions) {
 
     console.log(`Searching for: ${termsByType.join(" | ")}`);
     console.log(`Match logic: ${matchAll ? "ALL (AND)" : "ANY (OR)"}`);
-    console.log(`Max seeds: ${max}`);
+    console.log(`Max seeds: ${max === Infinity ? "UNLIMITED" : max}`);
     console.log(`Deck: ${deck}, Stake: ${stake}`);
     if (early) console.log(`Early exit: Ante ${early}`);
+    if (saveFile) console.log(`Saving matches to: ${saveFile}`);
     console.log("");
   }
 
   let seedsChecked = 0;
   let matches = [];
+  const startTime = Date.now();
 
-  while (seedsChecked < max) {
-    const seed = generateSeed();
-    seedsChecked++;
-
-    if (!quiet && seedsChecked % 10 === 0) {
-      process.stdout.write(`\rChecked ${seedsChecked}/${max} seeds...`);
+  // Helper function to save matches to file
+  function saveMatches() {
+    if (saveFile && matches.length > 0) {
+      const fs = require("fs");
+      const content =
+        matches
+          .map((match) => `${match.seed}: ${match.details.join(", ")}`)
+          .join("\n") + "\n";
+      fs.writeFileSync(saveFile, content);
     }
+  }
 
-    const results = analyzeSeed(seed, {
-      ante: early || 8,
-      deck: deck,
-      stake: stake,
-      compact: false, // Need shop data for search
-    });
+  // Handle Ctrl+C gracefully
+  let isExiting = false;
+  function handleExit() {
+    if (isExiting) return;
+    isExiting = true;
 
-    if (!results) continue;
+    console.log("\n\n🛑 Search interrupted by user");
+    if (saveFile) {
+      console.log("Saving matches before exit...");
+      saveMatches();
+    }
+    console.log(`\nSearch stopped! Checked ${seedsChecked} seeds.`);
+    console.log(`Found ${matches.length} matching seeds.`);
+    process.exit(0);
+  }
 
-    // Check for matches - collect all matches first
-    let foundMatches = new Set(); // Track which criteria we've matched
-    let matchDetails = [];
+  process.on("SIGINT", handleExit);
+  process.on("SIGTERM", handleExit);
 
-    for (const anteData of results.antes) {
-      // Check bosses
-      for (const bossSearch of boss) {
-        if (anteData.boss.toLowerCase().includes(bossSearch.toLowerCase())) {
-          foundMatches.add(`boss:${bossSearch}`);
-          matchDetails.push(`Boss: ${anteData.boss} (Ante ${anteData.ante})`);
-        }
+  // Memory management - force GC every N seeds
+  const GC_INTERVAL = 1000;
+
+  // Search in batches to prevent memory buildup
+  const BATCH_SIZE = 1000;
+
+  async function searchBatch(batchMax) {
+    const batchStart = seedsChecked;
+    while (seedsChecked < batchMax && seedsChecked < max && !isExiting) {
+      const seed = generateSeed();
+      seedsChecked++;
+
+      if (
+        !quiet &&
+        seedsChecked % (max === Infinity ? progressInterval : 10) === 0
+      ) {
+        const maxDisplay = max === Infinity ? "∞" : max;
+        const rate =
+          seedsChecked > 0
+            ? Math.round((seedsChecked / (Date.now() - startTime)) * 1000)
+            : 0;
+        process.stdout.write(
+          `\rChecked ${seedsChecked}/${maxDisplay} seeds (${rate}/sec, ${matches.length} matches)...`
+        );
       }
 
-      // Check vouchers
-      for (const voucherSearch of voucher) {
+      // Memory management - force garbage collection periodically
+      if (seedsChecked % GC_INTERVAL === 0) {
+        if (global.gc) {
+          global.gc();
+        }
+        // Allow event loop to process (enables Ctrl+C)
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      let results;
+      try {
+        results = analyzeSeed(seed, {
+          ante: early || 8,
+          deck: deck,
+          stake: stake,
+          compact: false, // Need shop data for search
+        });
+      } catch (error) {
         if (
-          anteData.voucher.toLowerCase().includes(voucherSearch.toLowerCase())
+          error.message &&
+          error.message.includes("memory access out of bounds")
         ) {
-          foundMatches.add(`voucher:${voucherSearch}`);
-          matchDetails.push(
-            `Voucher: ${anteData.voucher} (Ante ${anteData.ante})`
-          );
+          // Skip this problematic seed and continue
+          continue;
+        } else {
+          // Re-throw other errors
+          throw error;
         }
       }
 
-      // Check tags
-      for (const tagSearch of tag) {
-        if (anteData.tag1.toLowerCase().includes(tagSearch.toLowerCase())) {
-          foundMatches.add(`tag:${tagSearch}`);
-          matchDetails.push(`Tag: ${anteData.tag1} (Ante ${anteData.ante})`);
-        }
-        if (anteData.tag2.toLowerCase().includes(tagSearch.toLowerCase())) {
-          foundMatches.add(`tag:${tagSearch}`);
-          matchDetails.push(`Tag: ${anteData.tag2} (Ante ${anteData.ante})`);
-        }
-      }
+      if (!results) continue;
 
-      // Check shop items
-      if (anteData.shop) {
-        for (const item of anteData.shop) {
-          // Check jokers
-          for (const jokerSearch of joker) {
-            if (item.type === "Joker") {
-              // Build full joker description first
-              let itemDesc = item.name;
-              if (item.edition !== "No Edition")
-                itemDesc = `${item.edition} ${itemDesc}`;
-              if (item.eternal) itemDesc = `Eternal ${itemDesc}`;
-              if (item.perishable) itemDesc = `Perishable ${itemDesc}`;
-              if (item.rental) itemDesc = `Rental ${itemDesc}`;
+      // Check for matches - collect all matches first
+      let foundMatches = new Set(); // Track which criteria we've matched
+      let matchDetails = [];
 
-              // Search against the full description
-              if (itemDesc.toLowerCase().includes(jokerSearch.toLowerCase())) {
-                foundMatches.add(`joker:${jokerSearch}`);
-                matchDetails.push(`Joker: ${itemDesc} (Ante ${anteData.ante})`);
+      for (const anteData of results.antes) {
+        // Check bosses
+        for (const bossSearch of boss) {
+          if (anteData.boss.toLowerCase().includes(bossSearch.toLowerCase())) {
+            foundMatches.add(`boss:${bossSearch}`);
+            matchDetails.push(`Boss: ${anteData.boss} (Ante ${anteData.ante})`);
+          }
+        }
+
+        // Check vouchers
+        for (const voucherSearch of voucher) {
+          if (
+            anteData.voucher.toLowerCase().includes(voucherSearch.toLowerCase())
+          ) {
+            foundMatches.add(`voucher:${voucherSearch}`);
+            matchDetails.push(
+              `Voucher: ${anteData.voucher} (Ante ${anteData.ante})`
+            );
+          }
+        }
+
+        // Check tags
+        for (const tagSearch of tag) {
+          if (anteData.tag1.toLowerCase().includes(tagSearch.toLowerCase())) {
+            foundMatches.add(`tag:${tagSearch}`);
+            matchDetails.push(`Tag: ${anteData.tag1} (Ante ${anteData.ante})`);
+          }
+          if (anteData.tag2.toLowerCase().includes(tagSearch.toLowerCase())) {
+            foundMatches.add(`tag:${tagSearch}`);
+            matchDetails.push(`Tag: ${anteData.tag2} (Ante ${anteData.ante})`);
+          }
+        }
+
+        // Check shop items
+        if (anteData.shop) {
+          for (const item of anteData.shop) {
+            // Check jokers
+            for (const jokerSearch of joker) {
+              if (item.type === "Joker") {
+                // Build full joker description first
+                let itemDesc = item.name;
+                if (item.edition !== "No Edition")
+                  itemDesc = `${item.edition} ${itemDesc}`;
+                if (item.eternal) itemDesc = `Eternal ${itemDesc}`;
+                if (item.perishable) itemDesc = `Perishable ${itemDesc}`;
+                if (item.rental) itemDesc = `Rental ${itemDesc}`;
+
+                // Search against the full description
+                if (
+                  itemDesc.toLowerCase().includes(jokerSearch.toLowerCase())
+                ) {
+                  foundMatches.add(`joker:${jokerSearch}`);
+                  const shopIndex = anteData.shop.indexOf(item) + 1;
+                  matchDetails.push(
+                    `Joker: ${itemDesc} (Ante ${anteData.ante}, Shop slot ${shopIndex})`
+                  );
+                }
               }
             }
-          }
 
-          // Check general find
-          for (const findSearch of find) {
-            if (item.name.toLowerCase().includes(findSearch.toLowerCase())) {
-              foundMatches.add(`find:${findSearch}`);
-              matchDetails.push(`Item: ${item.name} (Ante ${anteData.ante})`);
-            }
-          }
-        }
-      }
-
-      // Check pack items
-      if (anteData.packs) {
-        for (const pack of anteData.packs) {
-          for (const card of pack.cards) {
-            // Skip undefined/null cards
-            if (!card || typeof card !== "string") continue;
-
-            // Check general find in pack cards
+            // Check general find
             for (const findSearch of find) {
-              if (card.toLowerCase().includes(findSearch.toLowerCase())) {
+              if (item.name.toLowerCase().includes(findSearch.toLowerCase())) {
                 foundMatches.add(`find:${findSearch}`);
+                const shopIndex = anteData.shop.indexOf(item) + 1;
                 matchDetails.push(
-                  `Pack Card: ${card} from ${pack.name} (Ante ${anteData.ante})`
+                  `Item: ${item.name} (Ante ${anteData.ante}, Shop slot ${shopIndex})`
                 );
               }
             }
           }
         }
+
+        // Check pack items
+        if (anteData.packs) {
+          for (const pack of anteData.packs) {
+            for (const card of pack.cards) {
+              // Skip undefined/null cards
+              if (!card || typeof card !== "string") continue;
+
+              // Check general find in pack cards
+              for (const findSearch of find) {
+                if (card.toLowerCase().includes(findSearch.toLowerCase())) {
+                  foundMatches.add(`find:${findSearch}`);
+                  matchDetails.push(
+                    `Pack Card: ${card} from ${pack.name} (Ante ${anteData.ante})`
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Determine if this seed matches our criteria
+      const totalCriteria =
+        find.length + joker.length + voucher.length + boss.length + tag.length;
+      const matchedCriteria = foundMatches.size;
+
+      let matched = false;
+      if (matchAll) {
+        // AND logic - need to match ALL criteria
+        matched = matchedCriteria === totalCriteria;
+      } else {
+        // OR logic - need to match ANY criteria
+        matched = matchedCriteria > 0;
+      }
+
+      if (matched) {
+        matches.push({ seed, details: matchDetails });
+        if (!quiet) {
+          process.stdout.write("\r" + " ".repeat(50) + "\r"); // Clear progress line
+        }
+        console.log(`\n🎯 MATCH FOUND: ${seed}`);
+        displayMatchTable(matchDetails);
+        console.log("");
+
+        // Save matches immediately when found
+        if (saveFile) {
+          saveMatches();
+        }
+
+        // Stop on first match if requested
+        if (stopOnFirst) {
+          console.log("🛑 Stopping search after first match (--first flag)");
+          return; // Return from batch function to stop entire search
+        }
       }
     }
+  }
 
-    // Determine if this seed matches our criteria
-    const totalCriteria =
-      find.length + joker.length + voucher.length + boss.length + tag.length;
-    const matchedCriteria = foundMatches.size;
+  // Run search in batches with cleanup between
+  while (seedsChecked < max && !isExiting) {
+    const nextBatch = Math.min(seedsChecked + BATCH_SIZE, max);
 
-    let matched = false;
-    if (matchAll) {
-      // AND logic - need to match ALL criteria
-      matched = matchedCriteria === totalCriteria;
-    } else {
-      // OR logic - need to match ANY criteria
-      matched = matchedCriteria > 0;
+    await searchBatch(nextBatch);
+
+    // Check if we should stop after first match
+    if (stopOnFirst && matches.length > 0) {
+      break;
     }
 
-    if (matched) {
-      matches.push({ seed, details: matchDetails });
-      if (!quiet) {
-        process.stdout.write("\r" + " ".repeat(50) + "\r"); // Clear progress line
-      }
-      console.log(`\n🎯 MATCH FOUND: ${seed}`);
-      matchDetails.forEach((detail) => console.log(`  └─ ${detail}`));
-      console.log("");
+    // Cleanup between batches
+    if (global.gc) {
+      global.gc();
+    }
 
-      // For now, continue searching (could add --first flag to stop at first match)
+    // Small pause between batches to let memory settle
+    if (seedsChecked < max && !isExiting) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
 
@@ -469,10 +722,16 @@ function searchForItem(searchOptions) {
     process.stdout.write("\r" + " ".repeat(50) + "\r"); // Clear progress line
   }
 
+  // Final save
+  if (saveFile) {
+    saveMatches();
+    console.log(`Matches saved to ${saveFile}`);
+  }
+
   console.log(`\nSearch complete! Checked ${seedsChecked} seeds.`);
   console.log(`Found ${matches.length} matching seeds.`);
 
-  if (matches.length > 0) {
+  if (matches.length > 0 && !saveFile) {
     console.log("\nAll matches:");
     matches.forEach((match) => {
       console.log(`${match.seed}: ${match.details.join(", ")}`);
@@ -489,7 +748,7 @@ if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
 }
 
 // Wait for WebAssembly to load
-setTimeout(() => {
+setTimeout(async () => {
   if (!global.Immolate.Instance) {
     console.error("Error: WebAssembly module failed to load");
     process.exit(1);
@@ -546,13 +805,26 @@ setTimeout(() => {
           case "--all":
             searchOptions.matchAll = true;
             break;
+          case "--unlimited":
+            searchOptions.max = Infinity;
+            break;
+          case "--save":
+            searchOptions.saveFile = args[++i];
+            break;
+          case "--progress":
+            searchOptions.progressInterval = parseInt(args[++i]) || 1000;
+            break;
+          case "--first":
+          case "--stop":
+            searchOptions.stopOnFirst = true;
+            break;
           case "--any":
             searchOptions.matchAll = false;
             break;
         }
       }
 
-      searchForItem(searchOptions);
+      await searchForItem(searchOptions);
     } else {
       // Single seed analysis
       const seed = args[0].toUpperCase().replace(/0/g, "O");
@@ -576,6 +848,14 @@ setTimeout(() => {
           case "--compact":
             options.compact = true;
             break;
+          case "--shop-limit":
+            try {
+              options.shopLimit = JSON.parse(args[++i]);
+            } catch (e) {
+              console.error("Error: --shop-limit must be a valid JSON array like [20,40,60,75]");
+              process.exit(1);
+            }
+            break;
         }
       }
 
@@ -593,7 +873,7 @@ setTimeout(() => {
           console.log(`  Tags: ${ante.tag1}, ${ante.tag2}`);
 
           if (ante.shop && !options.compact) {
-            console.log(`  Shop (first 80):`);
+            console.log(`  Shop (first ${ante.shop.length}):`);
             ante.shop.forEach((item, i) => {
               let desc = item.name;
               if (item.edition !== "No Edition")
