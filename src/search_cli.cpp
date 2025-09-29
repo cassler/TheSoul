@@ -369,21 +369,33 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
     std::size_t anteWidth = 4;    // "Ante"
     std::size_t slotWidth = 4;    // "Slot"
     std::size_t packWidth = 4;    // "Pack"
+    std::size_t detailsWidth = 7; // "Details"
 
-    std::vector<std::array<std::string, 5>> rows;
+    std::vector<std::array<std::string, 6>> rows;
     rows.reserve(match.events.size());
     for (const auto& event : match.events) {
-        std::array<std::string, 5> row;
+        std::array<std::string, 6> row;
         row[0] = event.name;
         row[1] = event.location.empty() ? "-" : event.location;
         row[2] = (event.ante > 0) ? std::to_string(event.ante) : "-";
         row[3] = (event.slot > 0) ? std::to_string(event.slot) : "-";
         row[4] = event.packName.empty() ? "-" : event.packName;
+        if (!event.details.empty()) {
+            std::ostringstream oss;
+            for (std::size_t i = 0; i < event.details.size(); ++i) {
+                if (i > 0) oss << "; ";
+                oss << event.details[i];
+            }
+            row[5] = oss.str();
+        } else {
+            row[5] = "-";
+        }
         nameWidth = std::max(nameWidth, row[0].size());
         locationWidth = std::max(locationWidth, row[1].size());
         anteWidth = std::max(anteWidth, row[2].size());
         slotWidth = std::max(slotWidth, row[3].size());
         packWidth = std::max(packWidth, row[4].size());
+        detailsWidth = std::max(detailsWidth, row[5].size());
         rows.push_back(std::move(row));
     }
 
@@ -393,15 +405,17 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
                   << edge << std::string(anteWidth + 2, fill)
                   << edge << std::string(slotWidth + 2, fill)
                   << edge << std::string(packWidth + 2, fill)
+                  << edge << std::string(detailsWidth + 2, fill)
                   << edge << "\n";
     };
 
-    auto printRow = [&](const std::array<std::string, 5>& row, bool header = false) {
+    auto printRow = [&](const std::array<std::string, 6>& row, bool header = false) {
         std::cout << "| " << std::left << std::setw(static_cast<int>(nameWidth)) << row[0]
                   << " | " << std::left << std::setw(static_cast<int>(locationWidth)) << row[1]
                   << " | " << std::right << std::setw(static_cast<int>(anteWidth)) << row[2]
                   << " | " << std::right << std::setw(static_cast<int>(slotWidth)) << row[3]
                   << " | " << std::left << std::setw(static_cast<int>(packWidth)) << row[4]
+                  << " | " << std::left << std::setw(static_cast<int>(detailsWidth)) << row[5]
                   << " |" << "\n";
         if (header) {
             std::cout << std::left;
@@ -409,7 +423,7 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
     };
 
     printDivider();
-    std::array<std::string, 5> header = {"Name", "Location", "Ante", "Slot", "Pack"};
+    std::array<std::string, 6> header = {"Name", "Location", "Ante", "Slot", "Pack", "Details"};
     printRow(header, true);
     printDivider();
     for (const auto& row : rows) {
