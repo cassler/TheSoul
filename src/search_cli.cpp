@@ -9,12 +9,19 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
-#include <random>
 #include <mutex>
+#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <io.h>
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -28,6 +35,103 @@ constexpr std::uint64_t kTotalSeeds = []() constexpr {
     }
     return value;
 }();
+
+enum class ColorMode {
+    Auto,
+    Always,
+    Never
+};
+
+enum class RowTone {
+    Header,
+    Normal,
+    Rare,
+    Legendary
+};
+
+constexpr const char* kAnsiReset = "\033[0m";
+constexpr const char* kAnsiBold = "\033[1m";
+constexpr const char* kAnsiDim = "\033[2m";
+constexpr const char* kAnsiHeader = "\033[97;1m";
+constexpr const char* kAnsiPrimary = "\033[96;1m";
+constexpr const char* kAnsiAccent = "\033[94;1m";
+constexpr const char* kAnsiRare = "\033[96m";
+constexpr const char* kAnsiLegendary = "\033[93;1m";
+constexpr const char* kAnsiMuted = "\033[90m";
+constexpr const char* kAnsiHighlight = "\033[95;1m";
+
+bool gColorEnabled = false;
+
+#ifdef _WIN32
+bool enableVirtualTerminalProcessing() {
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    DWORD mode = 0;
+    if (!GetConsoleMode(handle, &mode)) {
+        return false;
+    }
+    if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) {
+        return true;
+    }
+    mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    return SetConsoleMode(handle, mode) != 0;
+}
+
+bool stdoutIsTerminal() {
+    return _isatty(_fileno(stdout)) != 0;
+}
+#else
+bool stdoutIsTerminal() {
+    return isatty(STDOUT_FILENO) != 0;
+}
+#endif
+
+bool detectAutoColorSupport() {
+    const char* forceColor = std::getenv("FORCE_COLOR");
+    if (forceColor && forceColor[0] != '\0') {
+        return std::string(forceColor) != "0";
+    }
+    if (std::getenv("NO_COLOR")) {
+        return false;
+    }
+    if (!stdoutIsTerminal()) {
+        return false;
+    }
+#ifdef _WIN32
+    return enableVirtualTerminalProcessing();
+#else
+    const char* term = std::getenv("TERM");
+    if (!term) {
+        return false;
+    }
+    std::string value(term);
+    if (value == "dumb") {
+        return false;
+    }
+    return true;
+#endif
+}
+
+bool computeColorEnabled(ColorMode mode) {
+    switch (mode) {
+    case ColorMode::Always:
+        return true;
+    case ColorMode::Never:
+        return false;
+    case ColorMode::Auto:
+    default:
+        return detectAutoColorSupport();
+    }
+}
+
+std::string styleIf(bool enabled, const char* code, const std::string& text) {
+    if (!enabled || !code || !*code) {
+        return text;
+    }
+    return std::string(code) + text + kAnsiReset;
+}
 
 char digitToChar(int value) {
     if (value < 26) {
@@ -104,7 +208,173 @@ struct Options {
     bool randomizeStart = false;
     analysis::SearchCriteria criteria;
     analysis::AnalysisConfig baseConfig = analysis::makeDefaultConfig("AAAAAAAA");
+    ColorMode colorMode = ColorMode::Auto;
+    bool colorize = false;
 };
+
+struct TableRow {
+    std::array<std::string, 6> cells{};
+    RowTone tone = RowTone::Normal;
+};
+
+const char* toneColor(RowTone tone) {
+    switch (tone) {
+    case RowTone::Header:
+        return kAnsiHeader;
+    case RowTone::Rare:
+        return kAnsiRare;
+    case RowTone::Legendary:
+        return kAnsiLegendary;
+    case RowTone::Normal:
+    default:
+        return nullptr;
+    }
+}
+
+std::string joinWith(const std::vector<std::string>& values, const std::string& delimiter) {
+    if (values.empty()) {
+        return "-";
+    }
+    std::ostringstream oss;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
+            oss << delimiter;
+        }
+        oss << values[i];
+    }
+    return oss.str();
+}
+
+std::string joinDetails(const std::vector<std::string>& details) {
+    if (details.empty()) {
+        return "-";
+    }
+    std::ostringstream oss;
+    for (std::size_t i = 0; i < details.size(); ++i) {
+        if (i > 0) oss << "; ";
+        oss << details[i];
+    }
+    return oss.str();
+}
+
+std::string repeatGlyph(const std::string& glyph, std::size_t count) {
+    if (glyph.empty() || count == 0) {
+        return "";
+    }
+    std::string result;
+    result.reserve(glyph.size() * count);
+    for (std::size_t i = 0; i < count; ++i) {
+        result += glyph;
+    }
+    return result;
+}
+
+RowTone toneFromText(const std::string& text) {
+    if (text.empty()) {
+        return RowTone::Normal;
+    }
+    std::string upper = analysis::normalizeToken(text);
+    if (upper.find("LEGENDARY") != std::string::npos) {
+        return RowTone::Legendary;
+    }
+    if (upper.find("RARE") != std::string::npos) {
+        return RowTone::Rare;
+    }
+    return RowTone::Normal;
+}
+
+RowTone toneForEvent(const analysis::MatchEvent& event) {
+    if (!event.details.empty()) {
+        for (const auto& detail : event.details) {
+            RowTone tone = toneFromText(detail);
+            if (tone == RowTone::Legendary) return tone;
+        }
+        for (const auto& detail : event.details) {
+            RowTone tone = toneFromText(detail);
+            if (tone == RowTone::Rare) return tone;
+        }
+    }
+    RowTone nameTone = toneFromText(event.name);
+    if (nameTone != RowTone::Normal) {
+        return nameTone;
+    }
+    RowTone packTone = toneFromText(event.packName);
+    if (packTone != RowTone::Normal) {
+        return packTone;
+    }
+    return RowTone::Normal;
+}
+
+std::string padCell(const std::string& value, std::size_t width) {
+    std::ostringstream oss;
+    oss << std::left << std::setw(static_cast<int>(width)) << value;
+    return oss.str();
+}
+
+void printTableSection(const std::array<std::size_t, 6>& widths,
+                       const std::vector<TableRow>& rows,
+                       const std::string& indent) {
+    if (rows.empty()) {
+        return;
+    }
+
+    auto emitRow = [&](const TableRow& row) {
+        std::cout << indent;
+        for (std::size_t i = 0; i < row.cells.size(); ++i) {
+            std::string cell = padCell(row.cells[i], widths[i]);
+            std::cout << styleIf(gColorEnabled, toneColor(row.tone), cell);
+            if (i + 1 < row.cells.size()) {
+                std::cout << "  ";
+            }
+        }
+        std::cout << "\n";
+    };
+
+    TableRow header;
+    header.cells = {"Name", "Location", "Ante", "Slot", "Pack", "Details"};
+    header.tone = RowTone::Header;
+    emitRow(header);
+
+    std::string divider;
+    for (std::size_t i = 0; i < widths.size(); ++i) {
+        if (i > 0) divider += "  ";
+        divider.append(widths[i], '-');
+    }
+    std::cout << indent << styleIf(gColorEnabled, kAnsiMuted, divider) << "\n";
+
+    for (const auto& row : rows) {
+        emitRow(row);
+    }
+}
+
+void printHeadlineBox(const std::vector<std::string>& lines) {
+    if (lines.empty()) {
+        return;
+    }
+    std::size_t width = 0;
+    for (const auto& line : lines) {
+        width = std::max(width, line.size());
+    }
+
+    std::string top = "╭" + repeatGlyph("─", width + 2) + "╮";
+    std::string bottom = "╰" + repeatGlyph("─", width + 2) + "╯";
+    std::cout << styleIf(gColorEnabled, kAnsiPrimary, top) << "\n";
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        std::string padded = lines[i];
+        if (padded.size() < width) {
+            padded.append(width - padded.size(), ' ');
+        }
+        std::string textColor = (i == 0) ? std::string(kAnsiHeader) : std::string(kAnsiAccent);
+        if (!gColorEnabled) {
+            textColor.clear();
+        }
+        std::string left = styleIf(gColorEnabled, kAnsiPrimary, "│ ");
+        std::string content = textColor.empty() ? padded : textColor + padded + kAnsiReset;
+        std::string right = styleIf(gColorEnabled, kAnsiPrimary, " │");
+        std::cout << left << content << right << "\n";
+    }
+    std::cout << styleIf(gColorEnabled, kAnsiPrimary, bottom) << "\n";
+}
 
 void printUsage() {
     std::cerr << "Usage: search_cli [options]\n"
@@ -122,7 +392,9 @@ void printUsage() {
               << "  --stake NAME           Stake name (default White Stake)\n"
               << "  --version N            Game version (default 10106)\n"
               << "  --progress             Show periodic progress updates (default)\n"
-              << "  --no-progress          Suppress progress output\n";
+              << "  --no-progress          Suppress progress output\n"
+              << "  --color               Force colored output\n"
+              << "  --no-color            Disable colored output\n";
 }
 
 bool parsePositiveInt(const std::string& text, int& valueOut) {
@@ -248,6 +520,10 @@ bool parseArguments(int argc, char** argv, Options& opts) {
             opts.showProgress = true;
         } else if (arg == "--no-progress") {
             opts.showProgress = false;
+        } else if (arg == "--color") {
+            opts.colorMode = ColorMode::Always;
+        } else if (arg == "--no-color") {
+            opts.colorMode = ColorMode::Never;
         } else if (arg == "--deck") {
             if (i + 1 >= argc) {
                 std::cerr << "Missing value after --deck\n";
@@ -330,107 +606,101 @@ bool parseArguments(int argc, char** argv, Options& opts) {
 
     analysis::normalizeSearchCriteria(opts.criteria);
 
+    opts.colorize = computeColorEnabled(opts.colorMode);
+    gColorEnabled = opts.colorize;
+
     return true;
 }
 
 void printMatch(const std::string& seed, const analysis::SearchMatch& match, std::mutex& outputMutex) {
     std::lock_guard<std::mutex> lock(outputMutex);
-    std::cout << "Seed " << seed;
-    if (match.ante > 0) {
-        std::cout << " matched on ante " << match.ante;
-    } else {
-        std::cout << " matched";
+
+    std::vector<std::string> headline;
+    {
+        std::ostringstream title;
+        title << "Seed " << seed;
+        if (match.ante > 0) {
+            title << " • Ante " << match.ante;
+        }
+        headline.push_back(title.str());
     }
+    {
+        std::ostringstream stats;
+        stats << "Events: " << match.events.size();
+        if (!match.highlights.empty()) {
+            stats << " • Highlights: " << match.highlights.size();
+        }
+        headline.push_back(stats.str());
+    }
+    if (!match.boss.empty() || !match.voucher.empty()) {
+        std::ostringstream meta;
+        meta << "Boss: " << (match.boss.empty() ? "-" : match.boss)
+             << "  |  Voucher: " << (match.voucher.empty() ? "-" : match.voucher);
+        headline.push_back(meta.str());
+    }
+    if (!match.tags.empty()) {
+        std::ostringstream tags;
+        tags << "Tags: " << joinWith(match.tags, ", ");
+        headline.push_back(tags.str());
+    }
+
+    printHeadlineBox(headline);
     std::cout << "\n";
 
-    if (!match.boss.empty() || !match.voucher.empty()) {
-        std::cout << "  Boss: " << (match.boss.empty() ? "-" : match.boss)
-                  << "    Voucher: " << (match.voucher.empty() ? "-" : match.voucher) << "\n";
-    }
-
-    if (!match.tags.empty()) {
-        std::cout << "  Tags: ";
-        for (std::size_t i = 0; i < match.tags.size(); ++i) {
-            if (i > 0) {
-                std::cout << ", ";
-            }
-            std::cout << match.tags[i];
-        }
-        std::cout << "\n";
-    }
-
     if (match.events.empty()) {
-        std::cout << "  (No detailed events recorded)\n\n";
+        std::cout << styleIf(gColorEnabled, kAnsiDim, "  (No detailed events recorded)") << "\n\n";
         return;
     }
 
-    std::size_t nameWidth = 4;    // "Name"
-    std::size_t locationWidth = 8; // "Location"
-    std::size_t anteWidth = 4;    // "Ante"
-    std::size_t slotWidth = 4;    // "Slot"
-    std::size_t packWidth = 4;    // "Pack"
-    std::size_t detailsWidth = 7; // "Details"
-
-    std::vector<std::array<std::string, 6>> rows;
+    std::array<std::size_t, 6> widths = {4, 8, 4, 4, 4, 7};
+    std::vector<TableRow> rows;
     rows.reserve(match.events.size());
     for (const auto& event : match.events) {
-        std::array<std::string, 6> row;
-        row[0] = event.name;
-        row[1] = event.location.empty() ? "-" : event.location;
-        row[2] = (event.ante > 0) ? std::to_string(event.ante) : "-";
-        row[3] = (event.slot > 0) ? std::to_string(event.slot) : "-";
-        row[4] = event.packName.empty() ? "-" : event.packName;
-        if (!event.details.empty()) {
-            std::ostringstream oss;
-            for (std::size_t i = 0; i < event.details.size(); ++i) {
-                if (i > 0) oss << "; ";
-                oss << event.details[i];
-            }
-            row[5] = oss.str();
-        } else {
-            row[5] = "-";
+        TableRow row;
+        row.cells[0] = event.name;
+        row.cells[1] = event.location.empty() ? "-" : event.location;
+        row.cells[2] = (event.ante > 0) ? std::to_string(event.ante) : "-";
+        row.cells[3] = (event.slot > 0) ? std::to_string(event.slot) : "-";
+        row.cells[4] = event.packName.empty() ? "-" : event.packName;
+        row.cells[5] = joinDetails(event.details);
+        row.tone = toneForEvent(event);
+        for (std::size_t i = 0; i < row.cells.size(); ++i) {
+            widths[i] = std::max(widths[i], row.cells[i].size());
         }
-        nameWidth = std::max(nameWidth, row[0].size());
-        locationWidth = std::max(locationWidth, row[1].size());
-        anteWidth = std::max(anteWidth, row[2].size());
-        slotWidth = std::max(slotWidth, row[3].size());
-        packWidth = std::max(packWidth, row[4].size());
-        detailsWidth = std::max(detailsWidth, row[5].size());
         rows.push_back(std::move(row));
     }
 
-    auto printDivider = [&](char edge = '+', char fill = '-') {
-        std::cout << edge << std::string(nameWidth + 2, fill)
-                  << edge << std::string(locationWidth + 2, fill)
-                  << edge << std::string(anteWidth + 2, fill)
-                  << edge << std::string(slotWidth + 2, fill)
-                  << edge << std::string(packWidth + 2, fill)
-                  << edge << std::string(detailsWidth + 2, fill)
-                  << edge << "\n";
-    };
+    printTableSection(widths, rows, "  ");
+    std::cout << "\n";
 
-    auto printRow = [&](const std::array<std::string, 6>& row, bool header = false) {
-        std::cout << "| " << std::left << std::setw(static_cast<int>(nameWidth)) << row[0]
-                  << " | " << std::left << std::setw(static_cast<int>(locationWidth)) << row[1]
-                  << " | " << std::right << std::setw(static_cast<int>(anteWidth)) << row[2]
-                  << " | " << std::right << std::setw(static_cast<int>(slotWidth)) << row[3]
-                  << " | " << std::left << std::setw(static_cast<int>(packWidth)) << row[4]
-                  << " | " << std::left << std::setw(static_cast<int>(detailsWidth)) << row[5]
-                  << " |" << "\n";
-        if (header) {
-            std::cout << std::left;
+    if (!match.highlights.empty()) {
+        std::array<std::size_t, 6> hWidths = {4, 8, 4, 4, 4, 7};
+        std::vector<TableRow> highlightRows;
+        highlightRows.reserve(match.highlights.size());
+        for (const auto& event : match.highlights) {
+            TableRow row;
+            row.cells[0] = event.name;
+            row.cells[1] = event.location.empty() ? "-" : event.location;
+            row.cells[2] = (event.ante > 0) ? std::to_string(event.ante) : "-";
+            row.cells[3] = (event.slot > 0) ? std::to_string(event.slot) : "-";
+            row.cells[4] = event.packName.empty() ? "-" : event.packName;
+            row.cells[5] = joinDetails(event.details);
+            row.tone = toneForEvent(event);
+            if (row.tone == RowTone::Normal) {
+                row.tone = RowTone::Rare;
+            }
+            for (std::size_t i = 0; i < row.cells.size(); ++i) {
+                hWidths[i] = std::max(hWidths[i], row.cells[i].size());
+            }
+            highlightRows.push_back(std::move(row));
         }
-    };
 
-    printDivider();
-    std::array<std::string, 6> header = {"Name", "Location", "Ante", "Slot", "Pack", "Details"};
-    printRow(header, true);
-    printDivider();
-    for (const auto& row : rows) {
-        printRow(row);
+        std::cout << styleIf(gColorEnabled, kAnsiHighlight, "  Highlights") << "\n";
+        printTableSection(hWidths, highlightRows, "    ");
+        std::cout << "\n";
+    } else {
+        std::cout << "\n";
     }
-    printDivider();
-    std::cout << std::endl;
 }
 
 void searchExplicitSeeds(const Options& opts, std::atomic<int>& matchesFound, std::mutex& outputMutex) {

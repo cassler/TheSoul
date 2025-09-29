@@ -33,6 +33,14 @@ or playing **Judgement** will list the exact joker that appears, including
 rarity and any editions or stickers, so you can decide whether to invest before
 using the card.
 
+Results are now presented with a high-contrast headline banner plus optional
+ANSI color in terminals that support it. Rare and Legendary finds automatically
+populate a dedicated **Highlights** table beneath the main match list so you can
+spot premium pickups at a glance, even when they weren't part of the original
+search criteria. To adjust styling, pass `--color` (force on) or `--no-color`
+(force off); the tool also honors the standard `FORCE_COLOR` and `NO_COLOR`
+environment variables.
+
 Performance tip: criteria are cached internally, so repeated searches avoid
 per-seed normalization overhead. On a 10‑core Apple M2 Max, scanning 200k seeds
 with no matches

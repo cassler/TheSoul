@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 
 namespace analysis {
@@ -97,6 +98,7 @@ struct MatchEvent {
 
 struct SearchMatch {
     std::vector<MatchEvent> events;
+    std::vector<MatchEvent> highlights;
     int ante = 0;
     std::string boss;
     std::string voucher;
@@ -338,6 +340,7 @@ inline AnalysisResult runAnalysis(const AnalysisConfig& config) {
 
 inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& criteria, SearchMatch& match) {
     match.events.clear();
+    match.highlights.clear();
     match.ante = 0;
     match.boss.clear();
     match.voucher.clear();
@@ -383,6 +386,10 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
     std::vector<bool> jokerFound(jokerNeedles.size(), false);
     std::vector<bool> textFound(textNeedles.size(), false);
 
+    std::vector<MatchEvent> matchedEvents;
+    std::vector<MatchEvent> matchedHighlights;
+    std::unordered_set<std::string> highlightKeys;
+
     auto queueCountForAnte = [&](int ante) -> int {
         if (config.cardsPerAnte.empty()) return 0;
         std::size_t index = static_cast<std::size_t>(ante - 1);
@@ -425,7 +432,30 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         if (details && !details->empty()) {
             event.details = *details;
         }
-        match.events.push_back(std::move(event));
+        matchedEvents.push_back(std::move(event));
+    };
+
+    auto registerHighlight = [&](const std::string& name,
+                                 const std::string& location,
+                                 int anteValue,
+                                 int slotValue,
+                                 const std::string& packNameValue,
+                                 const std::vector<std::string>& details) {
+        std::ostringstream keyBuilder;
+        keyBuilder << normalizeToken(name) << '|' << normalizeToken(location)
+                   << '|' << anteValue << '|' << slotValue << '|' << normalizeToken(packNameValue);
+        std::string key = keyBuilder.str();
+        if (!highlightKeys.insert(key).second) {
+            return;
+        }
+        MatchEvent event;
+        event.name = name;
+        event.location = location;
+        event.ante = anteValue;
+        event.slot = slotValue;
+        event.packName = packNameValue;
+        event.details = details;
+    matchedHighlights.push_back(std::move(event));
     };
 
     auto considerText = [&](const std::string& candidate,
@@ -433,8 +463,8 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                             int ante,
                             int slot,
                             const std::string& packName,
-                            const std::vector<std::string>* details = nullptr) {
-        if (textNeedles.empty()) return;
+                            const std::vector<std::string>* details = nullptr) -> bool {
+        if (textNeedles.empty()) return false;
         auto evaluate = [&](const std::string& value) {
             std::string upper = normalizeToken(value);
             bool hit = false;
@@ -458,6 +488,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         if (newHit) {
             recordEvent(candidate, location, ante, slot, packName, details);
         }
+        return newHit;
     };
 
     auto considerJoker = [&](const std::string& candidate,
@@ -465,8 +496,8 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                              int ante,
                              int slot,
                              const std::string& packName,
-                             const std::vector<std::string>* details = nullptr) {
-        if (jokerNeedles.empty()) return;
+                             const std::vector<std::string>* details = nullptr) -> bool {
+        if (jokerNeedles.empty()) return false;
         std::string upper = normalizeToken(candidate);
         bool newHit = false;
         for (std::size_t i = 0; i < jokerNeedles.size(); ++i) {
@@ -478,6 +509,31 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         }
         if (newHit) {
             recordEvent(candidate, location, ante, slot, packName, details);
+        }
+        return newHit;
+    };
+
+    auto registerDetailHighlights = [&](const std::vector<std::string>& details,
+                                        const std::string& location,
+                                        int anteValue,
+                                        int slotValue,
+                                        const std::string& packNameValue) {
+        for (const auto& detail : details) {
+            std::string upper = normalizeToken(detail);
+            if (upper.find("LEGENDARY") == std::string::npos &&
+                upper.find("RARE") == std::string::npos) {
+                continue;
+            }
+            std::string label = detail;
+            auto colon = detail.find(':');
+            if (colon != std::string::npos && colon + 1 < detail.size()) {
+                label = detail.substr(colon + 1);
+                auto first = label.find_first_not_of(' ');
+                if (first != std::string::npos) {
+                    label = label.substr(first);
+                }
+            }
+            registerHighlight(label, location, anteValue, slotValue, packNameValue, {detail});
         }
     };
 
@@ -494,24 +550,36 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
     };
 
     for (int ante = 1; ante <= maxAnte; ++ante) {
+        bool anteMatched = false;
+
         inst.initUnlocks(ante, false);
 
         std::string boss = inst.nextBoss(ante);
         std::string voucher = inst.nextVoucher(ante);
         detail::handleVoucherUnlocks(inst, voucher);
-        match.ante = ante;
-        match.boss = boss;
-        match.voucher = voucher;
-        match.tags.clear();
-        match.tags.push_back(inst.nextTag(ante));
-        match.tags.push_back(inst.nextTag(ante));
 
-        considerText(boss, "Boss", ante, -1, "");
-        considerText(voucher, "Voucher", ante, -1, "");
-        for (std::size_t tagIndex = 0; tagIndex < match.tags.size(); ++tagIndex) {
-            considerText(match.tags[tagIndex], "Tag", ante, static_cast<int>(tagIndex) + 1, "");
+        std::vector<std::string> anteTags;
+        anteTags.push_back(inst.nextTag(ante));
+        anteTags.push_back(inst.nextTag(ante));
+
+        auto updateMatchFlag = [&]() {
+            if (requirementsSatisfied()) {
+                anteMatched = true;
+            }
+        };
+
+        if (considerText(boss, "Boss", ante, -1, "")) {
+            updateMatchFlag();
         }
-        if (requirementsSatisfied()) return true;
+        if (considerText(voucher, "Voucher", ante, -1, "")) {
+            updateMatchFlag();
+        }
+        for (std::size_t tagIndex = 0; tagIndex < anteTags.size(); ++tagIndex) {
+            if (considerText(anteTags[tagIndex], "Tag", ante, static_cast<int>(tagIndex) + 1, "")) {
+                updateMatchFlag();
+            }
+        }
+
         int queueCount = queueCountForAnte(ante);
         for (int idx = 1; idx <= queueCount; ++idx) {
             ShopItem item = inst.nextShopItem(ante);
@@ -524,6 +592,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                 extraDetails.emplace_back("Yields: " + predictJudgement(ante));
             }
             const std::vector<std::string>* detailsPtr = extraDetails.empty() ? nullptr : &extraDetails;
+
             if (item.type == "Joker") {
                 auto mods = jokerModifiers(item.jokerData);
                 std::ostringstream oss;
@@ -532,33 +601,98 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                 }
                 oss << item.item;
                 display = oss.str();
-                considerJoker(display, location, ante, idx, "");
+
+                if (considerJoker(display, location, ante, idx, "", detailsPtr)) {
+                    updateMatchFlag();
+                }
+
+                std::string rarityName = jokerRarityName(item.jokerData.rarity);
+                if (rarityName == "Rare" || rarityName == "Legendary") {
+                    std::vector<std::string> highlightDetails = {"Rarity: " + rarityName};
+                    if (detailsPtr) {
+                        highlightDetails.insert(highlightDetails.end(), detailsPtr->begin(), detailsPtr->end());
+                    }
+                    registerHighlight(describeJoker(item.jokerData), location, ante, idx, "", highlightDetails);
+                }
             }
-            considerText(display, location, ante, idx, "", detailsPtr);
-            if (requirementsSatisfied()) return true;
+
+            if (considerText(display, location, ante, idx, "", detailsPtr)) {
+                updateMatchFlag();
+            }
+            if (detailsPtr) {
+                registerDetailHighlights(*detailsPtr, location + " Detail", ante, idx, "");
+            }
         }
 
         int numPacks = (ante == 1) ? 4 : 6;
         for (int p = 0; p < numPacks; ++p) {
             std::string packName = inst.nextPack(ante);
-            considerText(packName, "Pack", ante, p + 1, "");
-            if (requirementsSatisfied()) return true;
-            Pack info = packInfo(packName);
-            auto contents = detail::packContents(inst, info, ante);
-            int entrySlot = 1;
-            for (const auto& entry : contents) {
-                std::vector<std::string> extraDetails;
-                if (entry == "The Soul") {
-                    extraDetails.emplace_back("Yields: " + predictSoul(ante));
-                } else if (entry == "Judgement") {
-                    extraDetails.emplace_back("Yields: " + predictJudgement(ante));
-                }
-                const std::vector<std::string>* cardDetails = extraDetails.empty() ? nullptr : &extraDetails;
-                considerText(entry, "Pack Card", ante, entrySlot, packName, cardDetails);
-                considerJoker(entry, "Pack Card", ante, entrySlot, packName);
-                if (requirementsSatisfied()) return true;
-                ++entrySlot;
+            if (considerText(packName, "Pack", ante, p + 1, "")) {
+                updateMatchFlag();
             }
+
+            Pack info = packInfo(packName);
+            if (info.type == "Buffoon Pack") {
+                auto jokers = inst.nextBuffoonPack(info.size, ante);
+                int entrySlot = 1;
+                for (const auto& data : jokers) {
+                    auto mods = jokerModifiers(data);
+                    std::ostringstream oss;
+                    for (const auto& mod : mods) {
+                        oss << mod << ' ';
+                    }
+                    oss << data.joker;
+                    std::string display = oss.str();
+
+                    if (considerText(display, "Pack Card", ante, entrySlot, packName)) {
+                        updateMatchFlag();
+                    }
+                    if (considerJoker(display, "Pack Card", ante, entrySlot, packName)) {
+                        updateMatchFlag();
+                    }
+
+                    std::string rarityName = jokerRarityName(data.rarity);
+                    if (rarityName == "Rare" || rarityName == "Legendary") {
+                        std::vector<std::string> highlightDetails = {"Rarity: " + rarityName};
+                        registerHighlight(describeJoker(data), "Pack Card", ante, entrySlot, packName, highlightDetails);
+                    }
+
+                    ++entrySlot;
+                }
+            } else {
+                auto contents = detail::packContents(inst, info, ante);
+                int entrySlot = 1;
+                for (const auto& entry : contents) {
+                    std::vector<std::string> extraDetails;
+                    if (entry == "The Soul") {
+                        extraDetails.emplace_back("Yields: " + predictSoul(ante));
+                    } else if (entry == "Judgement") {
+                        extraDetails.emplace_back("Yields: " + predictJudgement(ante));
+                    }
+                    const std::vector<std::string>* cardDetails = extraDetails.empty() ? nullptr : &extraDetails;
+
+                    if (considerText(entry, "Pack Card", ante, entrySlot, packName, cardDetails)) {
+                        updateMatchFlag();
+                    }
+                    if (considerJoker(entry, "Pack Card", ante, entrySlot, packName, cardDetails)) {
+                        updateMatchFlag();
+                    }
+                    if (cardDetails) {
+                        registerDetailHighlights(*cardDetails, "Pack Detail", ante, entrySlot, packName);
+                    }
+                    ++entrySlot;
+                }
+            }
+        }
+
+        if (anteMatched || requirementsSatisfied()) {
+            match.ante = ante;
+            match.boss = boss;
+            match.voucher = voucher;
+            match.tags = anteTags;
+            match.events = std::move(matchedEvents);
+            match.highlights = std::move(matchedHighlights);
+            return true;
         }
     }
 
