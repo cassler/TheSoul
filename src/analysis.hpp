@@ -435,13 +435,24 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                             const std::string& packName,
                             const std::vector<std::string>* details = nullptr) {
         if (textNeedles.empty()) return;
-        std::string upper = normalizeToken(candidate);
-        bool newHit = false;
-        for (std::size_t i = 0; i < textNeedles.size(); ++i) {
-            if (!textFound[i] && upper.find(textNeedles[i]) != std::string::npos) {
-                textFound[i] = true;
-                newHit = true;
-                if (!criteria.requireAll) break;
+        auto evaluate = [&](const std::string& value) {
+            std::string upper = normalizeToken(value);
+            bool hit = false;
+            for (std::size_t i = 0; i < textNeedles.size(); ++i) {
+                if (!textFound[i] && upper.find(textNeedles[i]) != std::string::npos) {
+                    textFound[i] = true;
+                    hit = true;
+                    if (!criteria.requireAll) break;
+                }
+            }
+            return hit;
+        };
+        bool newHit = evaluate(candidate);
+        if (details) {
+            for (const auto& detail : *details) {
+                if (evaluate(detail)) {
+                    newHit = true;
+                }
             }
         }
         if (newHit) {
