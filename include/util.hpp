@@ -70,13 +70,23 @@ struct LuaRandom {
 };
 
 double fract(double n) {
-    return fmod(n, 1);
+    double fractional = n - std::floor(n);
+    if (fractional < 0) {
+        fractional += 1.0;
+    }
+    return fractional;
 };
 
 double pseudohash(std::string s) {
     double num = 1;
     for (size_t i = s.length(); i > 0; i--) {
-        num = fract(1.1239285023/num*s[i-1]*3.141592653589793116+3.141592653589793116*i);
+    double code = static_cast<double>(static_cast<unsigned char>(s[i - 1]));
+    double tmp1 = 1.1239285023 / num;
+    double tmp2 = tmp1 * code;
+    double tmp3 = tmp2 * 3.141592653589793116;
+    double tmp4 = 3.141592653589793116 * static_cast<double>(i);
+    double term = tmp3 + tmp4;
+        num = fract(term);
     }
     if (isnan(num)) return std::numeric_limits<double>::quiet_NaN();
     return num;
