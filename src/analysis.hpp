@@ -5,11 +5,9 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
-#include <string>
-#include <vector>
+#include <utility>
 
 namespace analysis {
-
 inline const std::vector<std::string> kDefaultLockedVouchers = {
     "Overstock Plus", "Liquidation", "Glow Up",      "Reroll Glut",
     "Omen Globe",     "Observatory", "Nacho Tong",   "Recyclomancy",
@@ -79,8 +77,53 @@ struct AnalysisResult {
     std::vector<AnteResult> antes;
 };
 
+struct SearchCriteria {
+    std::vector<std::string> jokerNeedles;
+    std::vector<std::string> textNeedles;
+    bool requireAll = true;
+    int maxAnte = 8;
+    std::vector<std::string> normalizedJokerNeedles;
+    std::vector<std::string> normalizedTextNeedles;
+};
+
+struct MatchEvent {
+    std::string name;
+    std::string location;
+    std::string packName;
+    int ante = 0;
+    int slot = -1;
+};
+
+struct SearchMatch {
+    std::vector<MatchEvent> events;
+    int ante = 0;
+    std::string boss;
+    std::string voucher;
+    std::vector<std::string> tags;
+};
+
 inline std::string cardToString(const Card& card);
 inline std::vector<std::string> jokerModifiers(const JokerData& data);
+inline std::string normalizeToken(const std::string& value) {
+    std::string result = value;
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::toupper(ch));
+    });
+    return result;
+}
+
+inline void normalizeSearchCriteria(SearchCriteria& criteria) {
+    criteria.normalizedJokerNeedles.clear();
+    criteria.normalizedTextNeedles.clear();
+    criteria.normalizedJokerNeedles.reserve(criteria.jokerNeedles.size());
+    criteria.normalizedTextNeedles.reserve(criteria.textNeedles.size());
+    for (const auto& needle : criteria.jokerNeedles) {
+        criteria.normalizedJokerNeedles.push_back(normalizeToken(needle));
+    }
+    for (const auto& needle : criteria.textNeedles) {
+        criteria.normalizedTextNeedles.push_back(normalizeToken(needle));
+    }
+}
 
 namespace detail {
 
@@ -265,6 +308,192 @@ inline AnalysisResult runAnalysis(const AnalysisConfig& config) {
     }
 
     return result;
+}
+
+inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& criteria, SearchMatch& match) {
+    match.events.clear();
+    match.ante = 0;
+    match.boss.clear();
+    match.voucher.clear();
+    match.tags.clear();
+
+    Instance inst(config.seed);
+    inst.params = InstParams(config.deck, config.stake, false, config.version);
+
+    detail::applyLocks(inst, config);
+    inst.setStake(config.stake);
+    inst.setDeck(config.deck);
+
+    const int maxAnte = std::min(criteria.maxAnte, config.maxAnte);
+    if (maxAnte <= 0) {
+        return false;
+    }
+    thread_local std::vector<std::string> jokerNeedleScratch;
+    thread_local std::vector<std::string> textNeedleScratch;
+
+    const std::vector<std::string>* jokerNeedlesPtr = &criteria.normalizedJokerNeedles;
+    if (jokerNeedlesPtr->empty() && !criteria.jokerNeedles.empty()) {
+        jokerNeedleScratch.clear();
+        jokerNeedleScratch.reserve(criteria.jokerNeedles.size());
+        for (const auto& needle : criteria.jokerNeedles) {
+            jokerNeedleScratch.push_back(normalizeToken(needle));
+        }
+        jokerNeedlesPtr = &jokerNeedleScratch;
+    }
+
+    const std::vector<std::string>* textNeedlesPtr = &criteria.normalizedTextNeedles;
+    if (textNeedlesPtr->empty() && !criteria.textNeedles.empty()) {
+        textNeedleScratch.clear();
+        textNeedleScratch.reserve(criteria.textNeedles.size());
+        for (const auto& needle : criteria.textNeedles) {
+            textNeedleScratch.push_back(normalizeToken(needle));
+        }
+        textNeedlesPtr = &textNeedleScratch;
+    }
+
+    const auto& jokerNeedles = *jokerNeedlesPtr;
+    const auto& textNeedles = *textNeedlesPtr;
+
+    std::vector<bool> jokerFound(jokerNeedles.size(), false);
+    std::vector<bool> textFound(textNeedles.size(), false);
+
+    auto queueCountForAnte = [&](int ante) -> int {
+        if (config.cardsPerAnte.empty()) return 0;
+        std::size_t index = static_cast<std::size_t>(ante - 1);
+        if (index < config.cardsPerAnte.size()) {
+            return config.cardsPerAnte[index];
+        }
+        return config.cardsPerAnte.back();
+    };
+
+    auto requirementsSatisfied = [&]() {
+        if (criteria.requireAll) {
+            if (jokerNeedles.empty() && textNeedles.empty()) {
+                return false;
+            }
+            for (bool hit : jokerFound) {
+                if (!hit) return false;
+            }
+            for (bool hit : textFound) {
+                if (!hit) return false;
+            }
+            return true;
+        }
+        for (bool hit : jokerFound) if (hit) return true;
+        for (bool hit : textFound) if (hit) return true;
+        return false;
+    };
+
+    auto recordEvent = [&](const std::string& name,
+                           const std::string& location,
+                           int ante,
+                           int slot,
+                           const std::string& packName) {
+        MatchEvent event;
+        event.name = name;
+        event.location = location;
+        event.ante = ante;
+        event.slot = slot;
+        event.packName = packName;
+        match.events.push_back(std::move(event));
+    };
+
+    auto considerText = [&](const std::string& candidate,
+                            const std::string& location,
+                            int ante,
+                            int slot,
+                            const std::string& packName) {
+        if (textNeedles.empty()) return;
+        std::string upper = normalizeToken(candidate);
+        bool newHit = false;
+        for (std::size_t i = 0; i < textNeedles.size(); ++i) {
+            if (!textFound[i] && upper.find(textNeedles[i]) != std::string::npos) {
+                textFound[i] = true;
+                newHit = true;
+                if (!criteria.requireAll) break;
+            }
+        }
+        if (newHit) {
+            recordEvent(candidate, location, ante, slot, packName);
+        }
+    };
+
+    auto considerJoker = [&](const std::string& candidate,
+                             const std::string& location,
+                             int ante,
+                             int slot,
+                             const std::string& packName) {
+        if (jokerNeedles.empty()) return;
+        std::string upper = normalizeToken(candidate);
+        bool newHit = false;
+        for (std::size_t i = 0; i < jokerNeedles.size(); ++i) {
+            if (!jokerFound[i] && upper == jokerNeedles[i]) {
+                jokerFound[i] = true;
+                newHit = true;
+                if (!criteria.requireAll) break;
+            }
+        }
+        if (newHit) {
+            recordEvent(candidate, location, ante, slot, packName);
+        }
+    };
+
+    for (int ante = 1; ante <= maxAnte; ++ante) {
+        inst.initUnlocks(ante, false);
+
+        std::string boss = inst.nextBoss(ante);
+        std::string voucher = inst.nextVoucher(ante);
+        detail::handleVoucherUnlocks(inst, voucher);
+        match.ante = ante;
+        match.boss = boss;
+        match.voucher = voucher;
+        match.tags.clear();
+        match.tags.push_back(inst.nextTag(ante));
+        match.tags.push_back(inst.nextTag(ante));
+
+        considerText(boss, "Boss", ante, -1, "");
+        considerText(voucher, "Voucher", ante, -1, "");
+        for (std::size_t tagIndex = 0; tagIndex < match.tags.size(); ++tagIndex) {
+            considerText(match.tags[tagIndex], "Tag", ante, static_cast<int>(tagIndex) + 1, "");
+        }
+        if (requirementsSatisfied()) return true;
+        int queueCount = queueCountForAnte(ante);
+        for (int idx = 1; idx <= queueCount; ++idx) {
+            ShopItem item = inst.nextShopItem(ante);
+            std::string display = item.item;
+            std::string location = "Shop";
+            if (item.type == "Joker") {
+                auto mods = jokerModifiers(item.jokerData);
+                std::ostringstream oss;
+                for (const auto& mod : mods) {
+                    oss << mod << ' ';
+                }
+                oss << item.item;
+                display = oss.str();
+                considerJoker(display, location, ante, idx, "");
+            }
+            considerText(display, location, ante, idx, "");
+            if (requirementsSatisfied()) return true;
+        }
+
+        int numPacks = (ante == 1) ? 4 : 6;
+        for (int p = 0; p < numPacks; ++p) {
+            std::string packName = inst.nextPack(ante);
+            considerText(packName, "Pack", ante, p + 1, "");
+            if (requirementsSatisfied()) return true;
+            Pack info = packInfo(packName);
+            auto contents = detail::packContents(inst, info, ante);
+            int entrySlot = 1;
+            for (const auto& entry : contents) {
+                considerText(entry, "Pack Card", ante, entrySlot, packName);
+                considerJoker(entry, "Pack Card", ante, entrySlot, packName);
+                if (requirementsSatisfied()) return true;
+                ++entrySlot;
+            }
+        }
+    }
+
+    return false;
 }
 
 } // namespace analysis
