@@ -56,7 +56,7 @@ struct LuaRandom {
         state[3] = z;
         return r;
     }
-    uint64_t randdblmem() {        
+    uint64_t randdblmem() {
         return (_randint() & 4503599627370495ull) | 4607182418800017408ull;
     }
     double random() {
