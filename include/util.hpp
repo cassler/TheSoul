@@ -80,6 +80,11 @@ double fract(double n) {
 double pseudohash(std::string s) {
     double num = 1;
     for (size_t i = s.length(); i > 0; i--) {
+    // @note - Resolves an issue where signed char values could cause inconsistent hash
+    // outputs across platforms.
+    // Explicitly casts each character to unsigned char and double for reliable,
+    // cross-platform hashing in WASM and native builds.Also splits calculation
+    // into steps for clarity.
     double code = static_cast<double>(static_cast<unsigned char>(s[i - 1]));
     double tmp1 = 1.1239285023 / num;
     double tmp2 = tmp1 * code;

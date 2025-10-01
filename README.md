@@ -21,6 +21,12 @@ Example usage (find Negative Blueprint anywhere in the early game):
 ./search_cli --joker "Negative Blueprint" --early 4 --limit 3
 ```
 
+Need at least a subset of matches? Use `--any N` to require at least `N`
+combined `--joker`/`--find` hits without demanding every condition. For
+instance,
+`./search_cli --joker "Perkeo" --joker "Blue Joker" --find "Negative" --find "Foil" --any 2`
+returns seeds where any two of those four criteria succeed.
+
 Matches are reported with location context, e.g.
 `Joker Name - Shop - Ante 3, Slot 12` or `Voucher Name - Ante 5`. When no
 explicit range is provided, the tool now starts from a randomized seed and wraps

@@ -82,6 +82,7 @@ struct SearchCriteria {
     std::vector<std::string> jokerNeedles;
     std::vector<std::string> textNeedles;
     bool requireAll = true;
+    int minMatches = 1;
     int maxAnte = 8;
     std::vector<std::string> normalizedJokerNeedles;
     std::vector<std::string> normalizedTextNeedles;
@@ -127,6 +128,18 @@ inline void normalizeSearchCriteria(SearchCriteria& criteria) {
     }
     for (const auto& needle : criteria.textNeedles) {
         criteria.normalizedTextNeedles.push_back(normalizeToken(needle));
+    }
+
+    if (criteria.minMatches < 1) {
+        criteria.minMatches = 1;
+    }
+    const int totalNeedles = static_cast<int>(criteria.normalizedJokerNeedles.size() + criteria.normalizedTextNeedles.size());
+    if (criteria.requireAll) {
+        if (totalNeedles > 0) {
+            criteria.minMatches = totalNeedles;
+        }
+    } else if (totalNeedles > 0 && criteria.minMatches > totalNeedles) {
+        criteria.minMatches = totalNeedles;
     }
 }
 
@@ -385,6 +398,20 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
 
     std::vector<bool> jokerFound(jokerNeedles.size(), false);
     std::vector<bool> textFound(textNeedles.size(), false);
+    const int totalNeedles = static_cast<int>(jokerNeedles.size() + textNeedles.size());
+    int satisfiedCount = 0;
+    const int threshold = [&]() {
+        if (criteria.requireAll) {
+            return totalNeedles;
+        }
+        if (totalNeedles == 0) {
+            return 0;
+        }
+        int requested = criteria.minMatches;
+        if (requested < 1) requested = 1;
+        if (requested > totalNeedles) requested = totalNeedles;
+        return requested;
+    }();
 
     std::vector<MatchEvent> matchedEvents;
     std::vector<MatchEvent> matchedHighlights;
@@ -401,7 +428,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
 
     auto requirementsSatisfied = [&]() {
         if (criteria.requireAll) {
-            if (jokerNeedles.empty() && textNeedles.empty()) {
+            if (totalNeedles == 0) {
                 return false;
             }
             for (bool hit : jokerFound) {
@@ -412,9 +439,10 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             }
             return true;
         }
-        for (bool hit : jokerFound) if (hit) return true;
-        for (bool hit : textFound) if (hit) return true;
-        return false;
+        if (threshold == 0) {
+            return false;
+        }
+        return satisfiedCount >= threshold;
     };
 
     auto recordEvent = [&](const std::string& name,
@@ -471,6 +499,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             for (std::size_t i = 0; i < textNeedles.size(); ++i) {
                 if (!textFound[i] && upper.find(textNeedles[i]) != std::string::npos) {
                     textFound[i] = true;
+                    ++satisfiedCount;
                     hit = true;
                     if (!criteria.requireAll) break;
                 }
@@ -503,6 +532,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         for (std::size_t i = 0; i < jokerNeedles.size(); ++i) {
             if (!jokerFound[i] && upper == jokerNeedles[i]) {
                 jokerFound[i] = true;
+                ++satisfiedCount;
                 newHit = true;
                 if (!criteria.requireAll) break;
             }

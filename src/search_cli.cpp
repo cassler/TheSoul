@@ -383,7 +383,7 @@ void printUsage() {
               << "  --count N              Number of sequential seeds to examine\n"
               << "  --joker NAME           Require a joker match (case-insensitive exact)\n"
               << "  --find TEXT            Require substring match (case-insensitive)\n"
-              << "  --any                  Satisfy any single --joker/--find\n"
+              << "  --any N               Require at least N --joker/--find matches (default 1)\n"
               << "  --all                  Require all --joker/--find (default)\n"
               << "  --early N              Only check antes 1..N (default 8)\n"
               << "  --limit N              Stop after N matches (default 1)\n"
@@ -513,9 +513,20 @@ bool parseArguments(int argc, char** argv, Options& opts) {
             }
             opts.early = early;
         } else if (arg == "--any") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after --any\n";
+                return false;
+            }
+            int minMatches = 0;
+            if (!parsePositiveInt(argv[++i], minMatches)) {
+                std::cerr << "--any requires a positive integer\n";
+                return false;
+            }
             opts.criteria.requireAll = false;
+            opts.criteria.minMatches = minMatches;
         } else if (arg == "--all") {
             opts.criteria.requireAll = true;
+            opts.criteria.minMatches = 1;
         } else if (arg == "--progress") {
             opts.showProgress = true;
         } else if (arg == "--no-progress") {
@@ -559,6 +570,19 @@ bool parseArguments(int argc, char** argv, Options& opts) {
     if (opts.criteria.jokerNeedles.empty() && opts.criteria.textNeedles.empty()) {
         std::cerr << "At least one --joker or --find argument is required\n";
         return false;
+    }
+
+    int totalConditions = static_cast<int>(opts.criteria.jokerNeedles.size() + opts.criteria.textNeedles.size());
+    if (!opts.criteria.requireAll) {
+        if (opts.criteria.minMatches <= 0) {
+            opts.criteria.minMatches = 1;
+        }
+        if (opts.criteria.minMatches > totalConditions) {
+            std::cerr << "--any value cannot exceed total number of conditions (" << totalConditions << ")\n";
+            return false;
+        }
+    } else {
+        opts.criteria.minMatches = std::max(1, totalConditions);
     }
 
     if (!opts.hasRange && opts.explicitSeeds.empty()) {
