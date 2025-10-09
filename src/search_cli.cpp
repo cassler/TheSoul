@@ -385,6 +385,10 @@ void printUsage() {
               << "  --find TEXT            Require substring match (case-insensitive)\n"
               << "  --any N               Require at least N --joker/--find matches (default 1)\n"
               << "  --all                  Require all --joker/--find (default)\n"
+              << "  --negative N, --neg N  Require N matched jokers with Negative edition\n"
+              << "  --poly N              Require N matched jokers with Polychrome edition\n"
+              << "  --holo N              Require N matched jokers with Holographic edition\n"
+              << "  --foil N              Require N matched jokers with Foil edition\n"
               << "  --early N              Only check antes 1..N (default 8)\n"
               << "  --limit N              Stop after N matches (default 1)\n"
               << "  --threads N            Worker threads for sequential search\n"
@@ -527,6 +531,50 @@ bool parseArguments(int argc, char** argv, Options& opts) {
         } else if (arg == "--all") {
             opts.criteria.requireAll = true;
             opts.criteria.minMatches = 1;
+        } else if (arg == "--negative" || arg == "--neg") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after " << arg << "\n";
+                return false;
+            }
+            int count = 0;
+            if (!parsePositiveInt(argv[++i], count)) {
+                std::cerr << arg << " requires a positive integer\n";
+                return false;
+            }
+            opts.criteria.minNegative = count;
+        } else if (arg == "--poly" || arg == "--polychrome") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after " << arg << "\n";
+                return false;
+            }
+            int count = 0;
+            if (!parsePositiveInt(argv[++i], count)) {
+                std::cerr << arg << " requires a positive integer\n";
+                return false;
+            }
+            opts.criteria.minPolychrome = count;
+        } else if (arg == "--holo" || arg == "--holographic") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after " << arg << "\n";
+                return false;
+            }
+            int count = 0;
+            if (!parsePositiveInt(argv[++i], count)) {
+                std::cerr << arg << " requires a positive integer\n";
+                return false;
+            }
+            opts.criteria.minHolographic = count;
+        } else if (arg == "--foil") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after --foil\n";
+                return false;
+            }
+            int count = 0;
+            if (!parsePositiveInt(argv[++i], count)) {
+                std::cerr << "--foil requires a positive integer\n";
+                return false;
+            }
+            opts.criteria.minFoil = count;
         } else if (arg == "--progress") {
             opts.showProgress = true;
         } else if (arg == "--no-progress") {
@@ -583,6 +631,18 @@ bool parseArguments(int argc, char** argv, Options& opts) {
         }
     } else {
         opts.criteria.minMatches = std::max(1, totalConditions);
+    }
+
+    // Validate edition requirements
+    int totalEditionReqs = opts.criteria.minNegative + opts.criteria.minPolychrome +
+                           opts.criteria.minHolographic + opts.criteria.minFoil;
+    if (totalEditionReqs > 0) {
+        int targetMatches = opts.criteria.requireAll ? totalConditions : opts.criteria.minMatches;
+        if (totalEditionReqs > targetMatches) {
+            std::cerr << "Total edition requirements (" << totalEditionReqs
+                      << ") cannot exceed target matches (" << targetMatches << ")\n";
+            return false;
+        }
     }
 
     if (!opts.hasRange && opts.explicitSeeds.empty()) {

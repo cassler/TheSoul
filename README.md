@@ -27,6 +27,18 @@ instance,
 `./search_cli --joker "Perkeo" --joker "Blue Joker" --find "Negative" --find "Foil" --any 2`
 returns seeds where any two of those four criteria succeed.
 
+Looking for specific editions? Use `--negative N`, `--poly N`, `--holo N`, or
+`--foil N` to require that at least `N` of your matched jokers have that
+edition. For example:
+
+```
+./search_cli --joker "Perkeo" --joker "Blueprint" --joker "DNA" --joker "Brainstorm" \
+  --any 4 --negative 2
+```
+
+finds seeds with any 4 of those jokers where at least 2 of the matched jokers
+are Negative.
+
 Matches are reported with location context, e.g.
 `Joker Name - Shop - Ante 3, Slot 12` or `Voucher Name - Ante 5`. When no
 explicit range is provided, the tool now starts from a randomized seed and wraps

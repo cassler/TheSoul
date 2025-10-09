@@ -84,6 +84,10 @@ struct SearchCriteria {
     bool requireAll = true;
     int minMatches = 1;
     int maxAnte = 8;
+    int minNegative = 0;
+    int minPolychrome = 0;
+    int minHolographic = 0;
+    int minFoil = 0;
     std::vector<std::string> normalizedJokerNeedles;
     std::vector<std::string> normalizedTextNeedles;
 };
@@ -228,7 +232,7 @@ inline std::vector<std::string> packContents(Instance& inst, const Pack& info, i
 inline AnalysisConfig makeDefaultConfig(const std::string& seed) {
     AnalysisConfig config;
     config.seed = seed;
-    config.cardsPerAnte = {15, 50, 50, 50, 50, 50, 50, 50};
+    config.cardsPerAnte = {14, 28, 48, 64, 96, 96, 96, 96};
     return config;
 }
 
@@ -400,6 +404,10 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
     std::vector<bool> textFound(textNeedles.size(), false);
     const int totalNeedles = static_cast<int>(jokerNeedles.size() + textNeedles.size());
     int satisfiedCount = 0;
+    int negativeCount = 0;
+    int polychromeCount = 0;
+    int holographicCount = 0;
+    int foilCount = 0;
     const int threshold = [&]() {
         if (criteria.requireAll) {
             return totalNeedles;
@@ -437,12 +445,22 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             for (bool hit : textFound) {
                 if (!hit) return false;
             }
-            return true;
+        } else {
+            if (threshold == 0) {
+                return false;
+            }
+            if (satisfiedCount < threshold) {
+                return false;
+            }
         }
-        if (threshold == 0) {
-            return false;
-        }
-        return satisfiedCount >= threshold;
+
+        // Check edition requirements
+        if (criteria.minNegative > 0 && negativeCount < criteria.minNegative) return false;
+        if (criteria.minPolychrome > 0 && polychromeCount < criteria.minPolychrome) return false;
+        if (criteria.minHolographic > 0 && holographicCount < criteria.minHolographic) return false;
+        if (criteria.minFoil > 0 && foilCount < criteria.minFoil) return false;
+
+        return true;
     };
 
     auto recordEvent = [&](const std::string& name,
@@ -493,19 +511,30 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                             const std::string& packName,
                             const std::vector<std::string>* details = nullptr) -> bool {
         if (textNeedles.empty()) return false;
+
+        std::string upper = normalizeToken(candidate);
+        bool candidateMatched = false;
+
         auto evaluate = [&](const std::string& value) {
-            std::string upper = normalizeToken(value);
+            std::string valueUpper = normalizeToken(value);
             bool hit = false;
             for (std::size_t i = 0; i < textNeedles.size(); ++i) {
-                if (!textFound[i] && upper.find(textNeedles[i]) != std::string::npos) {
+                if (!textFound[i] && valueUpper.find(textNeedles[i]) != std::string::npos) {
                     textFound[i] = true;
                     ++satisfiedCount;
+
+                    // Track if the main candidate matched (not just details)
+                    if (value == candidate) {
+                        candidateMatched = true;
+                    }
+
                     hit = true;
                     if (!criteria.requireAll) break;
                 }
             }
             return hit;
         };
+
         bool newHit = evaluate(candidate);
         if (details) {
             for (const auto& detail : *details) {
@@ -514,6 +543,16 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                 }
             }
         }
+
+        // If the candidate itself matched and has edition keywords, track them
+        // This handles --find matching joker names like "Perkeo" in "Negative Perkeo"
+        if (candidateMatched) {
+            if (upper.find("NEGATIVE") != std::string::npos) ++negativeCount;
+            if (upper.find("POLYCHROME") != std::string::npos) ++polychromeCount;
+            if (upper.find("HOLOGRAPHIC") != std::string::npos) ++holographicCount;
+            if (upper.find("FOIL") != std::string::npos) ++foilCount;
+        }
+
         if (newHit) {
             recordEvent(candidate, location, ante, slot, packName, details);
         }
@@ -529,10 +568,40 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         if (jokerNeedles.empty()) return false;
         std::string upper = normalizeToken(candidate);
         bool newHit = false;
+
         for (std::size_t i = 0; i < jokerNeedles.size(); ++i) {
-            if (!jokerFound[i] && upper == jokerNeedles[i]) {
+            if (jokerFound[i]) continue;
+
+            // Check if needle matches candidate
+            // If needle is "BLUEPRINT", match "BLUEPRINT" or "NEGATIVE BLUEPRINT"
+            // If needle is "NEGATIVE BLUEPRINT", only match exact "NEGATIVE BLUEPRINT"
+            bool matches = false;
+            if (upper == jokerNeedles[i]) {
+                // Exact match
+                matches = true;
+            } else if (upper.find(jokerNeedles[i]) != std::string::npos) {
+                // Substring match only if the needle doesn't contain edition keywords
+                // (so "Blueprint" matches "Negative Blueprint", but "Negative Blueprint" doesn't match "Blueprint")
+                const std::string& needle = jokerNeedles[i];
+                bool needleHasEdition = (needle.find("NEGATIVE") != std::string::npos ||
+                                         needle.find("POLYCHROME") != std::string::npos ||
+                                         needle.find("HOLOGRAPHIC") != std::string::npos ||
+                                         needle.find("FOIL") != std::string::npos);
+                if (!needleHasEdition) {
+                    matches = true;
+                }
+            }
+
+            if (matches) {
                 jokerFound[i] = true;
                 ++satisfiedCount;
+
+                // Track editions for this match
+                if (upper.find("NEGATIVE") != std::string::npos) ++negativeCount;
+                if (upper.find("POLYCHROME") != std::string::npos) ++polychromeCount;
+                if (upper.find("HOLOGRAPHIC") != std::string::npos) ++holographicCount;
+                if (upper.find("FOIL") != std::string::npos) ++foilCount;
+
                 newHit = true;
                 if (!criteria.requireAll) break;
             }
