@@ -648,6 +648,18 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         return describeJoker(result);
     };
 
+    auto predictRareTag = [&](int ante) {
+        Instance snapshot = inst;
+        JokerData result = snapshot.nextJoker("rta", ante, true);
+        return describeJoker(result);
+    };
+
+    auto predictUncommonTag = [&](int ante) {
+        Instance snapshot = inst;
+        JokerData result = snapshot.nextJoker("uta", ante, true);
+        return describeJoker(result);
+    };
+
     for (int ante = 1; ante <= maxAnte; ++ante) {
         bool anteMatched = false;
 
@@ -674,8 +686,38 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             updateMatchFlag();
         }
         for (std::size_t tagIndex = 0; tagIndex < anteTags.size(); ++tagIndex) {
-            if (considerText(anteTags[tagIndex], "Tag", ante, static_cast<int>(tagIndex) + 1, "")) {
+            const std::string& tag = anteTags[tagIndex];
+            std::vector<std::string> tagDetails;
+            std::string jokerYield;
+
+            // Predict jokers yielded by skip tags
+            // Second skip (tagIndex == 1) advances to next ante
+            int skipAnte = (tagIndex == 1) ? ante + 1 : ante;
+
+            if (tag == "Rare Tag") {
+                jokerYield = predictRareTag(skipAnte);
+                tagDetails.emplace_back("Yields: " + jokerYield);
+            } else if (tag == "Uncommon Tag") {
+                jokerYield = predictUncommonTag(skipAnte);
+                tagDetails.emplace_back("Yields: " + jokerYield);
+            }
+
+            const std::vector<std::string>* tagDetailsPtr = tagDetails.empty() ? nullptr : &tagDetails;
+
+            // Check if the yielded joker matches search criteria
+            if (!jokerYield.empty()) {
+                if (considerJoker(jokerYield, "Tag", ante, static_cast<int>(tagIndex) + 1, "", tagDetailsPtr)) {
+                    updateMatchFlag();
+                }
+            }
+
+            // Also check if the tag name itself matches text search
+            if (considerText(tag, "Tag", ante, static_cast<int>(tagIndex) + 1, "", tagDetailsPtr)) {
                 updateMatchFlag();
+            }
+
+            if (tagDetailsPtr) {
+                registerDetailHighlights(*tagDetailsPtr, "Tag Detail", ante, static_cast<int>(tagIndex) + 1, "");
             }
         }
 
@@ -685,10 +727,14 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             std::string display = item.item;
             std::string location = "Shop";
             std::vector<std::string> extraDetails;
+            std::string jokerYield;
+
             if (item.type == "Spectral" && item.item == "The Soul") {
-                extraDetails.emplace_back("Yields: " + predictSoul(ante));
+                jokerYield = predictSoul(ante);
+                extraDetails.emplace_back("Yields: " + jokerYield);
             } else if (item.type == "Tarot" && item.item == "Judgement") {
-                extraDetails.emplace_back("Yields: " + predictJudgement(ante));
+                jokerYield = predictJudgement(ante);
+                extraDetails.emplace_back("Yields: " + jokerYield);
             }
             const std::vector<std::string>* detailsPtr = extraDetails.empty() ? nullptr : &extraDetails;
 
@@ -715,6 +761,14 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                 }
             }
 
+            // Check if the yielded joker matches search criteria (for Soul/Judgement)
+            if (!jokerYield.empty()) {
+                if (considerJoker(jokerYield, location, ante, idx, "", detailsPtr)) {
+                    updateMatchFlag();
+                }
+            }
+
+            // Also check the item name itself
             if (considerText(display, location, ante, idx, "", detailsPtr)) {
                 updateMatchFlag();
             }
@@ -763,13 +817,25 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                 int entrySlot = 1;
                 for (const auto& entry : contents) {
                     std::vector<std::string> extraDetails;
+                    std::string jokerYield;
+
                     if (entry == "The Soul") {
-                        extraDetails.emplace_back("Yields: " + predictSoul(ante));
+                        jokerYield = predictSoul(ante);
+                        extraDetails.emplace_back("Yields: " + jokerYield);
                     } else if (entry == "Judgement") {
-                        extraDetails.emplace_back("Yields: " + predictJudgement(ante));
+                        jokerYield = predictJudgement(ante);
+                        extraDetails.emplace_back("Yields: " + jokerYield);
                     }
                     const std::vector<std::string>* cardDetails = extraDetails.empty() ? nullptr : &extraDetails;
 
+                    // Check if the yielded joker matches search criteria
+                    if (!jokerYield.empty()) {
+                        if (considerJoker(jokerYield, "Pack Card", ante, entrySlot, packName, cardDetails)) {
+                            updateMatchFlag();
+                        }
+                    }
+
+                    // Also check the card name itself
                     if (considerText(entry, "Pack Card", ante, entrySlot, packName, cardDetails)) {
                         updateMatchFlag();
                     }
@@ -785,11 +851,99 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         }
 
         if (anteMatched || requirementsSatisfied()) {
+            // Found a match! Save the match details but continue through ante 8 for highlights
             match.ante = ante;
             match.boss = boss;
             match.voucher = voucher;
             match.tags = anteTags;
             match.events = std::move(matchedEvents);
+
+            // Continue processing remaining antes (up to 8) to collect highlights
+            for (int highlightAnte = ante + 1; highlightAnte <= std::min(8, config.maxAnte); ++highlightAnte) {
+                inst.initUnlocks(highlightAnte, false);
+
+                std::string highlightBoss = inst.nextBoss(highlightAnte);
+                std::string highlightVoucher = inst.nextVoucher(highlightAnte);
+                detail::handleVoucherUnlocks(inst, highlightVoucher);
+
+                // Process tags for predictions
+                std::vector<std::string> highlightTags;
+                highlightTags.push_back(inst.nextTag(highlightAnte));
+                highlightTags.push_back(inst.nextTag(highlightAnte));
+
+                for (std::size_t tagIndex = 0; tagIndex < highlightTags.size(); ++tagIndex) {
+                    const std::string& tag = highlightTags[tagIndex];
+                    std::vector<std::string> tagDetails;
+
+                    // Second skip (tagIndex == 1) advances to next ante
+                    int skipAnte = (tagIndex == 1) ? highlightAnte + 1 : highlightAnte;
+
+                    if (tag == "Rare Tag") {
+                        tagDetails.emplace_back("Yields: " + predictRareTag(skipAnte));
+                    } else if (tag == "Uncommon Tag") {
+                        tagDetails.emplace_back("Yields: " + predictUncommonTag(skipAnte));
+                    }
+
+                    if (!tagDetails.empty()) {
+                        registerDetailHighlights(tagDetails, "Tag Detail", highlightAnte, static_cast<int>(tagIndex) + 1, "");
+                    }
+                }
+
+                int highlightQueueCount = queueCountForAnte(highlightAnte);
+                for (int idx = 1; idx <= highlightQueueCount; ++idx) {
+                    ShopItem item = inst.nextShopItem(highlightAnte);
+                    std::vector<std::string> extraDetails;
+
+                    if (item.type == "Spectral" && item.item == "The Soul") {
+                        extraDetails.emplace_back("Yields: " + predictSoul(highlightAnte));
+                        registerDetailHighlights(extraDetails, "Shop Detail", highlightAnte, idx, "");
+                    } else if (item.type == "Tarot" && item.item == "Judgement") {
+                        extraDetails.emplace_back("Yields: " + predictJudgement(highlightAnte));
+                        registerDetailHighlights(extraDetails, "Shop Detail", highlightAnte, idx, "");
+                    } else if (item.type == "Joker") {
+                        std::string rarityName = jokerRarityName(item.jokerData.rarity);
+                        if (rarityName == "Rare" || rarityName == "Legendary") {
+                            std::vector<std::string> highlightDetails = {"Rarity: " + rarityName};
+                            registerHighlight(describeJoker(item.jokerData), "Shop", highlightAnte, idx, "", highlightDetails);
+                        }
+                    }
+                }
+
+                int numPacks = (highlightAnte == 1) ? 4 : 6;
+                for (int p = 0; p < numPacks; ++p) {
+                    std::string packName = inst.nextPack(highlightAnte);
+                    Pack info = packInfo(packName);
+
+                    if (info.type == "Buffoon Pack") {
+                        auto jokers = inst.nextBuffoonPack(info.size, highlightAnte);
+                        int entrySlot = 1;
+                        for (const auto& data : jokers) {
+                            std::string rarityName = jokerRarityName(data.rarity);
+                            if (rarityName == "Rare" || rarityName == "Legendary") {
+                                std::vector<std::string> highlightDetails = {"Rarity: " + rarityName};
+                                registerHighlight(describeJoker(data), "Pack Card", highlightAnte, entrySlot, packName, highlightDetails);
+                            }
+                            ++entrySlot;
+                        }
+                    } else {
+                        auto contents = detail::packContents(inst, info, highlightAnte);
+                        int entrySlot = 1;
+                        for (const auto& entry : contents) {
+                            std::vector<std::string> cardDetails;
+
+                            if (entry == "The Soul") {
+                                cardDetails.emplace_back("Yields: " + predictSoul(highlightAnte));
+                                registerDetailHighlights(cardDetails, "Pack Detail", highlightAnte, entrySlot, packName);
+                            } else if (entry == "Judgement") {
+                                cardDetails.emplace_back("Yields: " + predictJudgement(highlightAnte));
+                                registerDetailHighlights(cardDetails, "Pack Detail", highlightAnte, entrySlot, packName);
+                            }
+                            ++entrySlot;
+                        }
+                    }
+                }
+            }
+
             match.highlights = std::move(matchedHighlights);
             return true;
         }
