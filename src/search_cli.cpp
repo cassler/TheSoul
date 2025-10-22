@@ -9,11 +9,14 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #ifdef _WIN32
@@ -46,7 +49,8 @@ enum class RowTone {
     Header,
     Normal,
     Rare,
-    Legendary
+    Legendary,
+    Match
 };
 
 constexpr const char* kAnsiReset = "\033[0m";
@@ -225,6 +229,8 @@ const char* toneColor(RowTone tone) {
         return kAnsiRare;
     case RowTone::Legendary:
         return kAnsiLegendary;
+    case RowTone::Match:
+        return kAnsiHighlight;
     case RowTone::Normal:
     default:
         return nullptr;
@@ -311,6 +317,45 @@ std::string padCell(const std::string& value, std::size_t width) {
     return oss.str();
 }
 
+template<std::size_t N>
+void printTableSectionGeneric(const std::array<std::size_t, N>& widths,
+                               const std::vector<TableRow>& rows,
+                               const std::string& indent,
+                               bool withHeader) {
+    if (rows.empty()) {
+        return;
+    }
+
+    auto emitRow = [&](const TableRow& row, std::size_t numCells) {
+        std::cout << indent;
+        for (std::size_t i = 0; i < numCells && i < row.cells.size(); ++i) {
+            std::string cell = padCell(row.cells[i], widths[i]);
+            std::cout << styleIf(gColorEnabled, toneColor(row.tone), cell);
+            if (i + 1 < numCells) {
+                std::cout << "  ";
+            }
+        }
+        std::cout << "\n";
+    };
+
+    std::size_t startIdx = 0;
+    if (withHeader && !rows.empty() && rows[0].tone == RowTone::Header) {
+        emitRow(rows[0], N);
+        
+        std::string divider;
+        for (std::size_t i = 0; i < N; ++i) {
+            if (i > 0) divider += "  ";
+            divider.append(widths[i], '-');
+        }
+        std::cout << indent << styleIf(gColorEnabled, kAnsiMuted, divider) << "\n";
+        startIdx = 1;
+    }
+
+    for (std::size_t i = startIdx; i < rows.size(); ++i) {
+        emitRow(rows[i], N);
+    }
+}
+
 void printTableSection(const std::array<std::size_t, 6>& widths,
                        const std::vector<TableRow>& rows,
                        const std::string& indent) {
@@ -331,7 +376,7 @@ void printTableSection(const std::array<std::size_t, 6>& widths,
     };
 
     TableRow header;
-    header.cells = {"Name", "Location", "Ante", "Slot", "Pack", "Details"};
+    header.cells = {"Name", "Location", "Ante", "Slot", "Edition", "Details"};
     header.tone = RowTone::Header;
     emitRow(header);
 
@@ -731,58 +776,115 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
     printHeadlineBox(headline);
     std::cout << "\n";
 
-    if (match.events.empty()) {
-        std::cout << styleIf(gColorEnabled, kAnsiDim, "  (No detailed events recorded)") << "\n\n";
-        return;
+    // Create a set of matched event keys (ante, slot, name) for quick lookup
+    std::set<std::tuple<int, int, std::string>> matchedKeys;
+    for (const auto& event : match.events) {
+        matchedKeys.insert(std::make_tuple(event.ante, event.slot, event.name));
     }
 
+    // Combine all events, using a map to deduplicate by (ante, slot)
+    std::map<std::pair<int, int>, analysis::MatchEvent> eventMap;
+    
+    // Add highlights first (lower priority)
+    for (const auto& event : match.highlights) {
+        auto key = std::make_pair(event.ante, event.slot);
+        eventMap[key] = event;
+    }
+    
+    // Add matched events (higher priority - will overwrite highlights at same position)
+    for (const auto& event : match.events) {
+        auto key = std::make_pair(event.ante, event.slot);
+        eventMap[key] = event;
+    }
+    
+    // Build table rows with proper highlighting
     std::array<std::size_t, 6> widths = {4, 8, 4, 4, 4, 7};
     std::vector<TableRow> rows;
-    rows.reserve(match.events.size());
-    for (const auto& event : match.events) {
+    rows.reserve(eventMap.size());
+    
+    for (const auto& [key, event] : eventMap) {
         TableRow row;
         row.cells[0] = event.name;
         row.cells[1] = event.location.empty() ? "-" : event.location;
         row.cells[2] = (event.ante > 0) ? std::to_string(event.ante) : "-";
         row.cells[3] = (event.slot > 0) ? std::to_string(event.slot) : "-";
-        row.cells[4] = event.packName.empty() ? "-" : event.packName;
+        row.cells[4] = event.edition.empty() ? "-" : event.edition;
         row.cells[5] = joinDetails(event.details);
-        row.tone = toneForEvent(event);
+        
+        // Check if this is a matched event
+        auto matchKey = std::make_tuple(event.ante, event.slot, event.name);
+        if (matchedKeys.count(matchKey) > 0) {
+            row.tone = RowTone::Match;  // Highlight our matches
+        } else {
+            row.tone = toneForEvent(event);  // Use rarity coloring for highlights
+        }
+        
         for (std::size_t i = 0; i < row.cells.size(); ++i) {
             widths[i] = std::max(widths[i], row.cells[i].size());
         }
         rows.push_back(std::move(row));
     }
 
-    printTableSection(widths, rows, "  ");
-    std::cout << "\n";
-
-    if (!match.highlights.empty()) {
-        std::array<std::size_t, 6> hWidths = {4, 8, 4, 4, 4, 7};
-        std::vector<TableRow> highlightRows;
-        highlightRows.reserve(match.highlights.size());
-        for (const auto& event : match.highlights) {
-            TableRow row;
-            row.cells[0] = event.name;
-            row.cells[1] = event.location.empty() ? "-" : event.location;
-            row.cells[2] = (event.ante > 0) ? std::to_string(event.ante) : "-";
-            row.cells[3] = (event.slot > 0) ? std::to_string(event.slot) : "-";
-            row.cells[4] = event.packName.empty() ? "-" : event.packName;
-            row.cells[5] = joinDetails(event.details);
-            row.tone = toneForEvent(event);
-            if (row.tone == RowTone::Normal) {
-                row.tone = RowTone::Rare;
-            }
-            for (std::size_t i = 0; i < row.cells.size(); ++i) {
-                hWidths[i] = std::max(hWidths[i], row.cells[i].size());
-            }
-            highlightRows.push_back(std::move(row));
-        }
-
-        std::cout << styleIf(gColorEnabled, kAnsiHighlight, "  Highlights") << "\n";
-        printTableSection(hWidths, highlightRows, "    ");
+    if (!rows.empty()) {
+        printTableSection(widths, rows, "  ");
         std::cout << "\n";
     } else {
+        std::cout << styleIf(gColorEnabled, kAnsiDim, "  (No events recorded)") << "\n\n";
+    }
+
+    // Ante Overview table
+    if (!match.anteSummaries.empty()) {
+        std::cout << styleIf(gColorEnabled, kAnsiHighlight, "  Ante Overview") << "\n";
+        
+        std::array<std::size_t, 6> aWidths = {4, 12, 14, 18, 18, 30};
+        std::vector<TableRow> anteRows;
+        anteRows.reserve(match.anteSummaries.size());
+        
+        for (const auto& summary : match.anteSummaries) {
+            TableRow row;
+            row.cells[0] = std::to_string(summary.ante);
+            row.cells[1] = summary.boss.empty() ? "-" : summary.boss;
+            row.cells[2] = summary.voucher.empty() ? "-" : summary.voucher;
+            
+            // Two columns for tags
+            row.cells[3] = summary.tags.size() > 0 ? summary.tags[0] : "-";
+            row.cells[4] = summary.tags.size() > 1 ? summary.tags[1] : "-";
+            
+            // Format skip yields
+            std::ostringstream yieldsStream;
+            if (summary.tagJokers.empty()) {
+                yieldsStream << "-";
+            } else {
+                for (std::size_t i = 0; i < summary.tagJokers.size(); ++i) {
+                    if (i > 0) yieldsStream << ", ";
+                    yieldsStream << summary.tagJokers[i];
+                }
+            }
+            row.cells[5] = yieldsStream.str();
+            
+            row.tone = RowTone::Normal;
+            
+            for (std::size_t i = 0; i < 6; ++i) {
+                aWidths[i] = std::max(aWidths[i], row.cells[i].size());
+            }
+            anteRows.push_back(std::move(row));
+        }
+        
+        // Print header
+        TableRow header;
+        header.cells[0] = "Ante";
+        header.cells[1] = "Boss";
+        header.cells[2] = "Voucher";
+        header.cells[3] = "Tag 1";
+        header.cells[4] = "Tag 2";
+        header.cells[5] = "Skip Yields";
+        header.tone = RowTone::Header;
+        for (std::size_t i = 0; i < 6; ++i) {
+            aWidths[i] = std::max(aWidths[i], header.cells[i].size());
+        }
+        anteRows.insert(anteRows.begin(), std::move(header));
+        
+        printTableSectionGeneric(aWidths, anteRows, "  ", true);
         std::cout << "\n";
     }
 }

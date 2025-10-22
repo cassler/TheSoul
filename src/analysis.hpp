@@ -96,14 +96,24 @@ struct MatchEvent {
     std::string name;
     std::string location;
     std::string packName;
+    std::string edition;  // Edition of joker (Negative, Polychrome, Holographic, Foil, or empty)
     int ante = 0;
     int slot = -1;
     std::vector<std::string> details;
 };
 
+struct AnteSummary {
+    int ante = 0;
+    std::string boss;
+    std::string voucher;
+    std::vector<std::string> tags;
+    std::vector<std::string> tagJokers;  // Jokers yielded by skip tags
+};
+
 struct SearchMatch {
     std::vector<MatchEvent> events;
     std::vector<MatchEvent> highlights;
+    std::vector<AnteSummary> anteSummaries;  // Summary of all antes through 8
     int ante = 0;
     std::string boss;
     std::string voucher;
@@ -232,7 +242,7 @@ inline std::vector<std::string> packContents(Instance& inst, const Pack& info, i
 inline AnalysisConfig makeDefaultConfig(const std::string& seed) {
     AnalysisConfig config;
     config.seed = seed;
-    config.cardsPerAnte = {14, 28, 48, 64, 96, 96, 96, 96};
+    config.cardsPerAnte = {12, 18, 32, 48, 72, 96, 96, 96};
     return config;
 }
 
@@ -358,6 +368,7 @@ inline AnalysisResult runAnalysis(const AnalysisConfig& config) {
 inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& criteria, SearchMatch& match) {
     match.events.clear();
     match.highlights.clear();
+    match.anteSummaries.clear();
     match.ante = 0;
     match.boss.clear();
     match.voucher.clear();
@@ -468,6 +479,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                            int ante,
                            int slot,
                            const std::string& packName,
+                           const std::string& edition,
                            const std::vector<std::string>* details) {
         MatchEvent event;
         event.name = name;
@@ -475,6 +487,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         event.ante = ante;
         event.slot = slot;
         event.packName = packName;
+        event.edition = edition;
         if (details && !details->empty()) {
             event.details = *details;
         }
@@ -486,6 +499,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                                  int anteValue,
                                  int slotValue,
                                  const std::string& packNameValue,
+                                 const std::string& editionValue,
                                  const std::vector<std::string>& details) {
         std::ostringstream keyBuilder;
         keyBuilder << normalizeToken(name) << '|' << normalizeToken(location)
@@ -500,6 +514,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         event.ante = anteValue;
         event.slot = slotValue;
         event.packName = packNameValue;
+        event.edition = editionValue;
         event.details = details;
     matchedHighlights.push_back(std::move(event));
     };
@@ -554,7 +569,14 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         }
 
         if (newHit) {
-            recordEvent(candidate, location, ante, slot, packName, details);
+            // Extract edition from candidate string
+            std::string edition;
+            std::string upperCand = normalizeToken(candidate);
+            if (upperCand.find("NEGATIVE") != std::string::npos) edition = "Negative";
+            else if (upperCand.find("POLYCHROME") != std::string::npos) edition = "Polychrome";
+            else if (upperCand.find("HOLOGRAPHIC") != std::string::npos) edition = "Holographic";
+            else if (upperCand.find("FOIL") != std::string::npos) edition = "Foil";
+            recordEvent(candidate, location, ante, slot, packName, edition, details);
         }
         return newHit;
     };
@@ -607,7 +629,14 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             }
         }
         if (newHit) {
-            recordEvent(candidate, location, ante, slot, packName, details);
+            // Extract edition from candidate string
+            std::string edition;
+            std::string upperCand = normalizeToken(candidate);
+            if (upperCand.find("NEGATIVE") != std::string::npos) edition = "Negative";
+            else if (upperCand.find("POLYCHROME") != std::string::npos) edition = "Polychrome";
+            else if (upperCand.find("HOLOGRAPHIC") != std::string::npos) edition = "Holographic";
+            else if (upperCand.find("FOIL") != std::string::npos) edition = "Foil";
+            recordEvent(candidate, location, ante, slot, packName, edition, details);
         }
         return newHit;
     };
@@ -632,7 +661,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                     label = label.substr(first);
                 }
             }
-            registerHighlight(label, location, anteValue, slotValue, packNameValue, {detail});
+            registerHighlight(label, location, anteValue, slotValue, packNameValue, "", {detail});
         }
     };
 
@@ -752,12 +781,22 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                 }
 
                 std::string rarityName = jokerRarityName(item.jokerData.rarity);
-                if (rarityName == "Rare" || rarityName == "Legendary") {
-                    std::vector<std::string> highlightDetails = {"Rarity: " + rarityName};
+                bool isRareOrLegendary = (rarityName == "Rare" || rarityName == "Legendary");
+                bool isNegative = (item.jokerData.edition == "Negative");
+
+                if (isRareOrLegendary || isNegative) {
+                    std::vector<std::string> highlightDetails;
+                    if (isRareOrLegendary) {
+                        highlightDetails.push_back("Rarity: " + rarityName);
+                    }
+                    if (isNegative) {
+                        highlightDetails.push_back("Edition: Negative");
+                    }
                     if (detailsPtr) {
                         highlightDetails.insert(highlightDetails.end(), detailsPtr->begin(), detailsPtr->end());
                     }
-                    registerHighlight(describeJoker(item.jokerData), location, ante, idx, "", highlightDetails);
+                    std::string edition = (item.jokerData.edition != "No Edition") ? item.jokerData.edition : "";
+                    registerHighlight(describeJoker(item.jokerData), location, ante, idx, "", edition, highlightDetails);
                 }
             }
 
@@ -805,9 +844,19 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                     }
 
                     std::string rarityName = jokerRarityName(data.rarity);
-                    if (rarityName == "Rare" || rarityName == "Legendary") {
-                        std::vector<std::string> highlightDetails = {"Rarity: " + rarityName};
-                        registerHighlight(describeJoker(data), "Pack Card", ante, entrySlot, packName, highlightDetails);
+                    bool isRareOrLegendary = (rarityName == "Rare" || rarityName == "Legendary");
+                    bool isNegative = (data.edition == "Negative");
+
+                    if (isRareOrLegendary || isNegative) {
+                        std::vector<std::string> highlightDetails;
+                        if (isRareOrLegendary) {
+                            highlightDetails.push_back("Rarity: " + rarityName);
+                        }
+                        if (isNegative) {
+                            highlightDetails.push_back("Edition: Negative");
+                        }
+                        std::string edition = (data.edition != "No Edition") ? data.edition : "";
+                        registerHighlight(describeJoker(data), "Pack Card", ante, entrySlot, packName, edition, highlightDetails);
                     }
 
                     ++entrySlot;
@@ -851,7 +900,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         }
 
         if (anteMatched || requirementsSatisfied()) {
-            // Found a match! Save the match details but continue through ante 8 for highlights
+            // Found a match! Save the match details but continue through ante 8 for highlights and summaries
             match.ante = ante;
             match.boss = boss;
             match.voucher = voucher;
@@ -859,7 +908,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             match.events = std::move(matchedEvents);
 
             // Continue processing remaining antes (up to 8) to collect highlights
-            for (int highlightAnte = ante + 1; highlightAnte <= std::min(8, config.maxAnte); ++highlightAnte) {
+            for (int highlightAnte = ante + 1; highlightAnte <= 8; ++highlightAnte) {
                 inst.initUnlocks(highlightAnte, false);
 
                 std::string highlightBoss = inst.nextBoss(highlightAnte);
@@ -879,9 +928,11 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                     int skipAnte = (tagIndex == 1) ? highlightAnte + 1 : highlightAnte;
 
                     if (tag == "Rare Tag") {
-                        tagDetails.emplace_back("Yields: " + predictRareTag(skipAnte));
+                        std::string joker = predictRareTag(skipAnte);
+                        tagDetails.emplace_back("Yields: " + joker);
                     } else if (tag == "Uncommon Tag") {
-                        tagDetails.emplace_back("Yields: " + predictUncommonTag(skipAnte));
+                        std::string joker = predictUncommonTag(skipAnte);
+                        tagDetails.emplace_back("Yields: " + joker);
                     }
 
                     if (!tagDetails.empty()) {
@@ -902,9 +953,19 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                         registerDetailHighlights(extraDetails, "Shop Detail", highlightAnte, idx, "");
                     } else if (item.type == "Joker") {
                         std::string rarityName = jokerRarityName(item.jokerData.rarity);
-                        if (rarityName == "Rare" || rarityName == "Legendary") {
-                            std::vector<std::string> highlightDetails = {"Rarity: " + rarityName};
-                            registerHighlight(describeJoker(item.jokerData), "Shop", highlightAnte, idx, "", highlightDetails);
+                        bool isRareOrLegendary = (rarityName == "Rare" || rarityName == "Legendary");
+                        bool isNegative = (item.jokerData.edition == "Negative");
+
+                        if (isRareOrLegendary || isNegative) {
+                            std::vector<std::string> highlightDetails;
+                            if (isRareOrLegendary) {
+                                highlightDetails.push_back("Rarity: " + rarityName);
+                            }
+                            if (isNegative) {
+                                highlightDetails.push_back("Edition: Negative");
+                            }
+                            std::string edition = (item.jokerData.edition != "No Edition") ? item.jokerData.edition : "";
+                            registerHighlight(describeJoker(item.jokerData), "Shop", highlightAnte, idx, "", edition, highlightDetails);
                         }
                     }
                 }
@@ -919,9 +980,19 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                         int entrySlot = 1;
                         for (const auto& data : jokers) {
                             std::string rarityName = jokerRarityName(data.rarity);
-                            if (rarityName == "Rare" || rarityName == "Legendary") {
-                                std::vector<std::string> highlightDetails = {"Rarity: " + rarityName};
-                                registerHighlight(describeJoker(data), "Pack Card", highlightAnte, entrySlot, packName, highlightDetails);
+                            bool isRareOrLegendary = (rarityName == "Rare" || rarityName == "Legendary");
+                            bool isNegative = (data.edition == "Negative");
+
+                            if (isRareOrLegendary || isNegative) {
+                                std::vector<std::string> highlightDetails;
+                                if (isRareOrLegendary) {
+                                    highlightDetails.push_back("Rarity: " + rarityName);
+                                }
+                                if (isNegative) {
+                                    highlightDetails.push_back("Edition: Negative");
+                                }
+                                std::string edition = (data.edition != "No Edition") ? data.edition : "";
+                                registerHighlight(describeJoker(data), "Pack Card", highlightAnte, entrySlot, packName, edition, highlightDetails);
                             }
                             ++entrySlot;
                         }
@@ -942,6 +1013,41 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                         }
                     }
                 }
+            }
+
+            // Build ante summaries for antes 1 through 8 using a fresh instance
+            Instance summaryInst(config.seed);
+            summaryInst.params = InstParams(config.deck, config.stake, false, config.version);
+            detail::applyLocks(summaryInst, config);
+            summaryInst.setStake(config.stake);
+            summaryInst.setDeck(config.deck);
+
+            // Always show summaries through ante 8 regardless of search limit
+            for (int a = 1; a <= 8; ++a) {
+                summaryInst.initUnlocks(a, false);
+
+                AnteSummary summary;
+                summary.ante = a;
+                summary.boss = summaryInst.nextBoss(a);
+                summary.voucher = summaryInst.nextVoucher(a);
+                detail::handleVoucherUnlocks(summaryInst, summary.voucher);
+
+                summary.tags.push_back(summaryInst.nextTag(a));
+                summary.tags.push_back(summaryInst.nextTag(a));
+
+                // Predict jokers from skip tags
+                for (std::size_t tagIndex = 0; tagIndex < summary.tags.size(); ++tagIndex) {
+                    const std::string& tag = summary.tags[tagIndex];
+                    int skipAnte = (tagIndex == 1) ? a + 1 : a;
+
+                    if (tag == "Rare Tag") {
+                        summary.tagJokers.push_back(predictRareTag(skipAnte));
+                    } else if (tag == "Uncommon Tag") {
+                        summary.tagJokers.push_back(predictUncommonTag(skipAnte));
+                    }
+                }
+
+                match.anteSummaries.push_back(std::move(summary));
             }
 
             match.highlights = std::move(matchedHighlights);
