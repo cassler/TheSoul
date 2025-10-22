@@ -341,7 +341,7 @@ void printTableSectionGeneric(const std::array<std::size_t, N>& widths,
     std::size_t startIdx = 0;
     if (withHeader && !rows.empty() && rows[0].tone == RowTone::Header) {
         emitRow(rows[0], N);
-        
+
         std::string divider;
         for (std::size_t i = 0; i < N; ++i) {
             if (i > 0) divider += "  ";
@@ -784,24 +784,24 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
 
     // Combine all events, using a map to deduplicate by (ante, slot)
     std::map<std::pair<int, int>, analysis::MatchEvent> eventMap;
-    
+
     // Add highlights first (lower priority)
     for (const auto& event : match.highlights) {
         auto key = std::make_pair(event.ante, event.slot);
         eventMap[key] = event;
     }
-    
+
     // Add matched events (higher priority - will overwrite highlights at same position)
     for (const auto& event : match.events) {
         auto key = std::make_pair(event.ante, event.slot);
         eventMap[key] = event;
     }
-    
+
     // Build table rows with proper highlighting
     std::array<std::size_t, 6> widths = {4, 8, 4, 4, 4, 7};
     std::vector<TableRow> rows;
     rows.reserve(eventMap.size());
-    
+
     for (const auto& [key, event] : eventMap) {
         TableRow row;
         row.cells[0] = event.name;
@@ -810,7 +810,7 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
         row.cells[3] = (event.slot > 0) ? std::to_string(event.slot) : "-";
         row.cells[4] = event.edition.empty() ? "-" : event.edition;
         row.cells[5] = joinDetails(event.details);
-        
+
         // Check if this is a matched event
         auto matchKey = std::make_tuple(event.ante, event.slot, event.name);
         if (matchedKeys.count(matchKey) > 0) {
@@ -818,7 +818,7 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
         } else {
             row.tone = toneForEvent(event);  // Use rarity coloring for highlights
         }
-        
+
         for (std::size_t i = 0; i < row.cells.size(); ++i) {
             widths[i] = std::max(widths[i], row.cells[i].size());
         }
@@ -835,21 +835,21 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
     // Ante Overview table
     if (!match.anteSummaries.empty()) {
         std::cout << styleIf(gColorEnabled, kAnsiHighlight, "  Ante Overview") << "\n";
-        
+
         std::array<std::size_t, 6> aWidths = {4, 12, 14, 18, 18, 30};
         std::vector<TableRow> anteRows;
         anteRows.reserve(match.anteSummaries.size());
-        
+
         for (const auto& summary : match.anteSummaries) {
             TableRow row;
             row.cells[0] = std::to_string(summary.ante);
             row.cells[1] = summary.boss.empty() ? "-" : summary.boss;
             row.cells[2] = summary.voucher.empty() ? "-" : summary.voucher;
-            
+
             // Two columns for tags
             row.cells[3] = summary.tags.size() > 0 ? summary.tags[0] : "-";
             row.cells[4] = summary.tags.size() > 1 ? summary.tags[1] : "-";
-            
+
             // Format skip yields
             std::ostringstream yieldsStream;
             if (summary.tagJokers.empty()) {
@@ -861,15 +861,15 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
                 }
             }
             row.cells[5] = yieldsStream.str();
-            
+
             row.tone = RowTone::Normal;
-            
+
             for (std::size_t i = 0; i < 6; ++i) {
                 aWidths[i] = std::max(aWidths[i], row.cells[i].size());
             }
             anteRows.push_back(std::move(row));
         }
-        
+
         // Print header
         TableRow header;
         header.cells[0] = "Ante";
@@ -883,7 +883,7 @@ void printMatch(const std::string& seed, const analysis::SearchMatch& match, std
             aWidths[i] = std::max(aWidths[i], header.cells[i].size());
         }
         anteRows.insert(anteRows.begin(), std::move(header));
-        
+
         printTableSectionGeneric(aWidths, anteRows, "  ", true);
         std::cout << "\n";
     }
