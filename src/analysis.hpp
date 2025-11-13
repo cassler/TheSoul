@@ -81,6 +81,8 @@ struct AnalysisResult {
 struct SearchCriteria {
     std::vector<std::string> jokerNeedles;
     std::vector<std::string> textNeedles;
+    std::vector<std::string> shopNeedles;
+    std::vector<std::string> voucherNeedles;
     bool requireAll = true;
     int minMatches = 1;
     int maxAnte = 8;
@@ -90,6 +92,8 @@ struct SearchCriteria {
     int minFoil = 0;
     std::vector<std::string> normalizedJokerNeedles;
     std::vector<std::string> normalizedTextNeedles;
+    std::vector<std::string> normalizedShopNeedles;
+    std::vector<std::string> normalizedVoucherNeedles;
 };
 
 struct MatchEvent {
@@ -135,19 +139,29 @@ inline std::string normalizeToken(const std::string& value) {
 inline void normalizeSearchCriteria(SearchCriteria& criteria) {
     criteria.normalizedJokerNeedles.clear();
     criteria.normalizedTextNeedles.clear();
+    criteria.normalizedShopNeedles.clear();
+    criteria.normalizedVoucherNeedles.clear();
     criteria.normalizedJokerNeedles.reserve(criteria.jokerNeedles.size());
     criteria.normalizedTextNeedles.reserve(criteria.textNeedles.size());
+    criteria.normalizedShopNeedles.reserve(criteria.shopNeedles.size());
+    criteria.normalizedVoucherNeedles.reserve(criteria.voucherNeedles.size());
     for (const auto& needle : criteria.jokerNeedles) {
         criteria.normalizedJokerNeedles.push_back(normalizeToken(needle));
     }
     for (const auto& needle : criteria.textNeedles) {
         criteria.normalizedTextNeedles.push_back(normalizeToken(needle));
     }
+    for (const auto& needle : criteria.shopNeedles) {
+        criteria.normalizedShopNeedles.push_back(normalizeToken(needle));
+    }
+    for (const auto& needle : criteria.voucherNeedles) {
+        criteria.normalizedVoucherNeedles.push_back(normalizeToken(needle));
+    }
 
     if (criteria.minMatches < 1) {
         criteria.minMatches = 1;
     }
-    const int totalNeedles = static_cast<int>(criteria.normalizedJokerNeedles.size() + criteria.normalizedTextNeedles.size());
+    const int totalNeedles = static_cast<int>(criteria.normalizedJokerNeedles.size() + criteria.normalizedTextNeedles.size() + criteria.normalizedShopNeedles.size() + criteria.normalizedVoucherNeedles.size());
     if (criteria.requireAll) {
         if (totalNeedles > 0) {
             criteria.minMatches = totalNeedles;
@@ -242,7 +256,7 @@ inline std::vector<std::string> packContents(Instance& inst, const Pack& info, i
 inline AnalysisConfig makeDefaultConfig(const std::string& seed) {
     AnalysisConfig config;
     config.seed = seed;
-    config.cardsPerAnte = {12, 18, 32, 48, 72, 96, 96, 96};
+    config.cardsPerAnte = {8, 12, 32, 48, 72, 96, 96, 96};
     return config;
 }
 
@@ -387,6 +401,8 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
     }
     thread_local std::vector<std::string> jokerNeedleScratch;
     thread_local std::vector<std::string> textNeedleScratch;
+    thread_local std::vector<std::string> shopNeedleScratch;
+    thread_local std::vector<std::string> voucherNeedleScratch;
 
     const std::vector<std::string>* jokerNeedlesPtr = &criteria.normalizedJokerNeedles;
     if (jokerNeedlesPtr->empty() && !criteria.jokerNeedles.empty()) {
@@ -408,13 +424,38 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         textNeedlesPtr = &textNeedleScratch;
     }
 
+    const std::vector<std::string>* shopNeedlesPtr = &criteria.normalizedShopNeedles;
+    if (shopNeedlesPtr->empty() && !criteria.shopNeedles.empty()) {
+        shopNeedleScratch.clear();
+        shopNeedleScratch.reserve(criteria.shopNeedles.size());
+        for (const auto& needle : criteria.shopNeedles) {
+            shopNeedleScratch.push_back(normalizeToken(needle));
+        }
+        shopNeedlesPtr = &shopNeedleScratch;
+    }
+
+    const std::vector<std::string>* voucherNeedlesPtr = &criteria.normalizedVoucherNeedles;
+    if (voucherNeedlesPtr->empty() && !criteria.voucherNeedles.empty()) {
+        voucherNeedleScratch.clear();
+        voucherNeedleScratch.reserve(criteria.voucherNeedles.size());
+        for (const auto& needle : criteria.voucherNeedles) {
+            voucherNeedleScratch.push_back(normalizeToken(needle));
+        }
+        voucherNeedlesPtr = &voucherNeedleScratch;
+    }
+
     const auto& jokerNeedles = *jokerNeedlesPtr;
     const auto& textNeedles = *textNeedlesPtr;
+    const auto& shopNeedles = *shopNeedlesPtr;
+    const auto& voucherNeedles = *voucherNeedlesPtr;
 
     std::vector<bool> jokerFound(jokerNeedles.size(), false);
     std::vector<bool> textFound(textNeedles.size(), false);
-    const int totalNeedles = static_cast<int>(jokerNeedles.size() + textNeedles.size());
+    std::vector<bool> shopFound(shopNeedles.size(), false);
+    std::vector<bool> voucherFound(voucherNeedles.size(), false);
+    const int totalNeedles = static_cast<int>(jokerNeedles.size() + textNeedles.size() + shopNeedles.size() + voucherNeedles.size());
     int satisfiedCount = 0;
+    int jokerMatchCount = 0;  // Track how many joker needles have been matched
     int negativeCount = 0;
     int polychromeCount = 0;
     int holographicCount = 0;
@@ -456,6 +497,12 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             for (bool hit : textFound) {
                 if (!hit) return false;
             }
+            for (bool hit : shopFound) {
+                if (!hit) return false;
+            }
+            for (bool hit : voucherFound) {
+                if (!hit) return false;
+            }
         } else {
             if (threshold == 0) {
                 return false;
@@ -466,6 +513,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         }
 
         // Check edition requirements
+        // Edition counts track all joker matches (via --joker, --find, or --shop)
         if (criteria.minNegative > 0 && negativeCount < criteria.minNegative) return false;
         if (criteria.minPolychrome > 0 && polychromeCount < criteria.minPolychrome) return false;
         if (criteria.minHolographic > 0 && holographicCount < criteria.minHolographic) return false;
@@ -617,6 +665,7 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             if (matches) {
                 jokerFound[i] = true;
                 ++satisfiedCount;
+                ++jokerMatchCount;
 
                 // Track editions for this match
                 if (upper.find("NEGATIVE") != std::string::npos) ++negativeCount;
@@ -637,6 +686,102 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
             else if (upperCand.find("HOLOGRAPHIC") != std::string::npos) edition = "Holographic";
             else if (upperCand.find("FOIL") != std::string::npos) edition = "Foil";
             recordEvent(candidate, location, ante, slot, packName, edition, details);
+        }
+        return newHit;
+    };
+
+    auto considerShop = [&](const std::string& candidate,
+                            const std::string& location,
+                            int ante,
+                            int slot,
+                            const std::string& packName,
+                            const std::vector<std::string>* details = nullptr) -> bool {
+        if (shopNeedles.empty()) return false;
+
+        std::string upper = normalizeToken(candidate);
+        bool candidateMatched = false;
+
+        auto evaluate = [&](const std::string& value) {
+            std::string valueUpper = normalizeToken(value);
+            bool hit = false;
+            for (std::size_t i = 0; i < shopNeedles.size(); ++i) {
+                if (!shopFound[i] && valueUpper.find(shopNeedles[i]) != std::string::npos) {
+                    shopFound[i] = true;
+                    ++satisfiedCount;
+
+                    // Track if the main candidate matched (not just details)
+                    if (value == candidate) {
+                        candidateMatched = true;
+                    }
+
+                    hit = true;
+                    if (!criteria.requireAll) break;
+                }
+            }
+            return hit;
+        };
+
+        bool newHit = evaluate(candidate);
+        if (details) {
+            for (const auto& detail : *details) {
+                if (evaluate(detail)) {
+                    newHit = true;
+                }
+            }
+        }
+
+        // If the candidate itself matched and has edition keywords, track them
+        if (candidateMatched) {
+            if (upper.find("NEGATIVE") != std::string::npos) ++negativeCount;
+            if (upper.find("POLYCHROME") != std::string::npos) ++polychromeCount;
+            if (upper.find("HOLOGRAPHIC") != std::string::npos) ++holographicCount;
+            if (upper.find("FOIL") != std::string::npos) ++foilCount;
+        }
+
+        if (newHit) {
+            // Extract edition from candidate string
+            std::string edition;
+            std::string upperCand = normalizeToken(candidate);
+            if (upperCand.find("NEGATIVE") != std::string::npos) edition = "Negative";
+            else if (upperCand.find("POLYCHROME") != std::string::npos) edition = "Polychrome";
+            else if (upperCand.find("HOLOGRAPHIC") != std::string::npos) edition = "Holographic";
+            else if (upperCand.find("FOIL") != std::string::npos) edition = "Foil";
+            recordEvent(candidate, location, ante, slot, packName, edition, details);
+        }
+        return newHit;
+    };
+
+    auto considerVoucher = [&](const std::string& candidate,
+                               const std::string& location,
+                               int ante,
+                               int slot,
+                               const std::string& packName,
+                               const std::vector<std::string>* details = nullptr) -> bool {
+        if (voucherNeedles.empty()) return false;
+        std::string upper = normalizeToken(candidate);
+        bool newHit = false;
+
+        for (std::size_t i = 0; i < voucherNeedles.size(); ++i) {
+            if (voucherFound[i]) continue;
+
+            // Check if needle matches candidate (exact or substring)
+            bool matches = false;
+            if (upper == voucherNeedles[i]) {
+                matches = true;
+            } else if (upper.find(voucherNeedles[i]) != std::string::npos) {
+                matches = true;
+            }
+
+            if (matches) {
+                voucherFound[i] = true;
+                ++satisfiedCount;
+                newHit = true;
+                if (!criteria.requireAll) break;
+            }
+        }
+
+        if (newHit) {
+            recordEvent(candidate, location, ante, slot, packName, "", details);
         }
         return newHit;
     };
@@ -709,6 +854,9 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
         };
 
         if (considerText(boss, "Boss", ante, -1, "")) {
+            updateMatchFlag();
+        }
+        if (considerVoucher(voucher, "Voucher", ante, -1, "")) {
             updateMatchFlag();
         }
         if (considerText(voucher, "Voucher", ante, -1, "")) {
@@ -807,7 +955,12 @@ inline bool searchSeed(const AnalysisConfig& config, const SearchCriteria& crite
                 }
             }
 
-            // Also check the item name itself
+            // Check the item against --shop needles
+            if (considerShop(display, location, ante, idx, "", detailsPtr)) {
+                updateMatchFlag();
+            }
+
+            // Also check the item name itself against --find
             if (considerText(display, location, ante, idx, "", detailsPtr)) {
                 updateMatchFlag();
             }

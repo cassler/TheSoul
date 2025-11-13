@@ -199,6 +199,63 @@ std::string numberToSeed(std::uint64_t value) {
     return seed;
 }
 
+std::string normalizeDeckName(const std::string& input) {
+    if (input.empty()) {
+        return "Red Deck";
+    }
+
+    // Convert to lowercase for comparison
+    std::string lower = input;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    // Check if it already ends with " deck"
+    if (lower.size() >= 5 && lower.substr(lower.size() - 5) == " deck") {
+        // Capitalize first letter and return with " Deck"
+        std::string name = input.substr(0, input.size() - 5);
+        if (!name.empty()) {
+            name[0] = std::toupper(static_cast<unsigned char>(name[0]));
+        }
+        return name + " Deck";
+    }
+
+    // Otherwise, capitalize first letter and append " Deck"
+    std::string result = input;
+    if (!result.empty()) {
+        result[0] = std::toupper(static_cast<unsigned char>(result[0]));
+    }
+    return result + " Deck";
+}
+
+std::string normalizeVoucherName(const std::string& input) {
+    if (input.empty()) {
+        return input;
+    }
+
+    // Convert to lowercase for comparison
+    std::string lower = input;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    // Check if it already starts with "the "
+    if (lower.size() >= 4 && lower.substr(0, 4) == "the ") {
+        // Capitalize "The" and the first letter of the rest
+        std::string result = "The ";
+        std::string rest = input.substr(4);
+        if (!rest.empty()) {
+            rest[0] = std::toupper(static_cast<unsigned char>(rest[0]));
+        }
+        return result + rest;
+    }
+
+    // Otherwise, capitalize first letter and prepend "The "
+    std::string result = input;
+    if (!result.empty()) {
+        result[0] = std::toupper(static_cast<unsigned char>(result[0]));
+    }
+    return "The " + result;
+}
+
 struct Options {
     std::vector<std::string> explicitSeeds;
     bool hasRange = false;
@@ -437,7 +494,7 @@ void printUsage() {
               << "  --early N              Only check antes 1..N (default 8)\n"
               << "  --limit N              Stop after N matches (default 1)\n"
               << "  --threads N            Worker threads for sequential search\n"
-              << "  --deck NAME            Deck name (default Red Deck)\n"
+              << "  --deck NAME            Deck name (e.g., \"ghost\" -> \"Ghost Deck\", default Red Deck)\n"
               << "  --stake NAME           Stake name (default White Stake)\n"
               << "  --version N            Game version (default 10106)\n"
               << "  --progress             Show periodic progress updates (default)\n"
@@ -489,6 +546,18 @@ bool parseArguments(int argc, char** argv, Options& opts) {
                 return false;
             }
             opts.criteria.textNeedles.emplace_back(argv[++i]);
+        } else if (arg == "--shop") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after --shop\n";
+                return false;
+            }
+            opts.criteria.shopNeedles.emplace_back(argv[++i]);
+        } else if (arg == "--voucher") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value after --voucher\n";
+                return false;
+            }
+            opts.criteria.voucherNeedles.emplace_back(normalizeVoucherName(argv[++i]));
         } else if (arg == "--seed") {
             if (i + 1 >= argc) {
                 std::cerr << "Missing value after --seed\n";
@@ -633,7 +702,7 @@ bool parseArguments(int argc, char** argv, Options& opts) {
                 std::cerr << "Missing value after --deck\n";
                 return false;
             }
-            opts.baseConfig.deck = argv[++i];
+            opts.baseConfig.deck = normalizeDeckName(argv[++i]);
         } else if (arg == "--stake") {
             if (i + 1 >= argc) {
                 std::cerr << "Missing value after --stake\n";
@@ -660,12 +729,12 @@ bool parseArguments(int argc, char** argv, Options& opts) {
         }
     }
 
-    if (opts.criteria.jokerNeedles.empty() && opts.criteria.textNeedles.empty()) {
-        std::cerr << "At least one --joker or --find argument is required\n";
+    if (opts.criteria.jokerNeedles.empty() && opts.criteria.textNeedles.empty() && opts.criteria.shopNeedles.empty() && opts.criteria.voucherNeedles.empty()) {
+        std::cerr << "At least one --joker, --find, --shop, or --voucher argument is required\n";
         return false;
     }
 
-    int totalConditions = static_cast<int>(opts.criteria.jokerNeedles.size() + opts.criteria.textNeedles.size());
+    int totalConditions = static_cast<int>(opts.criteria.jokerNeedles.size() + opts.criteria.textNeedles.size() + opts.criteria.shopNeedles.size() + opts.criteria.voucherNeedles.size());
     if (!opts.criteria.requireAll) {
         if (opts.criteria.minMatches <= 0) {
             opts.criteria.minMatches = 1;
@@ -682,10 +751,23 @@ bool parseArguments(int argc, char** argv, Options& opts) {
     int totalEditionReqs = opts.criteria.minNegative + opts.criteria.minPolychrome +
                            opts.criteria.minHolographic + opts.criteria.minFoil;
     if (totalEditionReqs > 0) {
-        int targetMatches = opts.criteria.requireAll ? totalConditions : opts.criteria.minMatches;
-        if (totalEditionReqs > targetMatches) {
+        // Edition requirements only apply to joker matches
+        int jokerCount = static_cast<int>(opts.criteria.jokerNeedles.size());
+        if (jokerCount == 0) {
+            std::cerr << "Edition requirements (--negative, --poly, --holo, --foil) require at least one --joker\n";
+            return false;
+        }
+
+        int targetJokers = jokerCount;
+        if (!opts.criteria.requireAll && opts.criteria.minMatches < jokerCount) {
+            // In --any mode, we might match fewer jokers than total joker needles
+            // Edition requirements can't exceed the number of jokers we'll actually match
+            targetJokers = std::min(opts.criteria.minMatches, jokerCount);
+        }
+
+        if (totalEditionReqs > targetJokers) {
             std::cerr << "Total edition requirements (" << totalEditionReqs
-                      << ") cannot exceed target matches (" << targetMatches << ")\n";
+                      << ") cannot exceed joker matches (" << targetJokers << ")\n";
             return false;
         }
     }

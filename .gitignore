@@ -1,0 +1,6 @@
+search_cli
+search_cli_build
+search_cli_test
+*.log
+.DS_Store
+.vscode
