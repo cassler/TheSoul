@@ -101,20 +101,20 @@ EMSCRIPTEN_BINDINGS(Immolate) {
         .property("enhancement", &Card::enhancement)
         .property("edition", &Card::edition)
         .property("seal", &Card::seal);
-    constant("ENHANCEMENTS", &ENHANCEMENTS);
-    constant("CARDS", &CARDS);
-    constant("SUITS", &SUITS);
-    constant("RANKS", &RANKS);
-    constant("TAROTS", &TAROTS);
-    constant("PLANETS", &PLANETS);
-    constant("COMMON_JOKERS", &COMMON_JOKERS);
-    constant("UNCOMMON_JOKERS", &UNCOMMON_JOKERS);
-    constant("RARE_JOKERS", &RARE_JOKERS);
-    constant("LEGENDARY_JOKERS", &LEGENDARY_JOKERS);
-    constant("VOUCHERS", &VOUCHERS);
-    constant("SPECTRALS", &SPECTRALS);
-    constant("TAGS", &TAGS);
-    constant("BOSSES", &BOSSES);
+    constant("ENHANCEMENTS", ENHANCEMENTS);
+    constant("CARDS", CARDS);
+    constant("SUITS", SUITS);
+    constant("RANKS", RANKS);
+    constant("TAROTS", TAROTS);
+    constant("PLANETS", PLANETS);
+    constant("COMMON_JOKERS", COMMON_JOKERS);
+    constant("UNCOMMON_JOKERS", UNCOMMON_JOKERS);
+    constant("RARE_JOKERS", RARE_JOKERS);
+    constant("LEGENDARY_JOKERS", LEGENDARY_JOKERS);
+    constant("VOUCHERS", VOUCHERS);
+    constant("SPECTRALS", SPECTRALS);
+    constant("TAGS", TAGS);
+    constant("BOSSES", BOSSES);
 
     //util.hpp
     function("pseudohash", &pseudohash);
